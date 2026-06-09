@@ -92,10 +92,41 @@ def run(user_text: str, *, reasoning: str = "low") -> PipelineResult:
                  data={"profile": asdict(applicant),
                        "assumptions_ms": list(intake_result.assumptions_ms)}))
 
+    # 2..5) shared tail: RETRIEVE -> COMPUTE+GAP -> EXPLAIN + dual gate --------
+    return _finish(applicant, intake_result.retrieval_query_ms,
+                   intake_result.assumptions_ms, stages, reasoning=reasoning)
+
+
+def run_from_applicant(applicant, *, retrieval_query_ms: str,
+                       assumptions_ms: tuple[str, ...] = (),
+                       reasoning: str = "low") -> PipelineResult:
+    """Assess a profile gathered structurally by the grill (interview) instead of from
+    free text. Skips SHIELD + INTAKE on purpose: structured facts carry no injection
+    surface, and the opening paragraph was already shielded at /grill/start. Everything
+    downstream — verdicts, narrative, and the dual safety gate — is identical to run().
+    """
+    stages: list[dict] = [
+        asdict(Stage("SHIELD", "ok", "Input awal disaring; jawapan susulan berstruktur.")),
+        asdict(Stage("INTAKE", "ok", "Profil dikumpul melalui temu bual berpandu.",
+                     data={"profile": asdict(applicant),
+                           "assumptions_ms": list(assumptions_ms)})),
+    ]
+    return _finish(applicant, retrieval_query_ms, assumptions_ms, stages,
+                   reasoning=reasoning)
+
+
+def _finish(applicant, retrieval_query_ms: str, assumptions_ms: tuple[str, ...],
+            stages: list[dict], *, reasoning: str) -> PipelineResult:
+    """RETRIEVE -> COMPUTE+GAP -> EXPLAIN + dual safety gate. Shared by both entry
+    points so the assess path stays byte-for-byte identical regardless of how the
+    Applicant was obtained."""
+    def record(stage: Stage) -> None:
+        stages.append(asdict(stage))
+
     # 2) RETRIEVE (agentic) — resilient: verdicts don't depend on this ---------
     passages: list[dict] = []
     try:
-        passages = kb.retrieve_passages(intake_result.retrieval_query_ms, reasoning=reasoning)
+        passages = kb.retrieve_passages(retrieval_query_ms, reasoning=reasoning)
         record(Stage("RETRIEVE", "ok", f"{len(passages)} petikan bersumber diperoleh."))
     except Exception as exc:  # noqa: BLE001 — degrade gracefully, keep deterministic core
         record(Stage("RETRIEVE", "error", f"Retrieval gagal: {str(exc)[:120]}"))
@@ -107,7 +138,7 @@ def run(user_text: str, *, reasoning: str = "low") -> PipelineResult:
                  data={"eligible": [checker.to_dict(r) for r in assessment.eligible]}))
 
     # 5) EXPLAIN + dual safety gate --------------------------------------------
-    narrative, facts = narrate.run_narrate(assessment, passages, intake_result.assumptions_ms)
+    narrative, facts = narrate.run_narrate(assessment, passages, assumptions_ms)
 
     # Hard guard: no fabricated money amount (deterministic, precise).
     thresholds = checker.load_thresholds()
@@ -139,7 +170,7 @@ def run(user_text: str, *, reasoning: str = "low") -> PipelineResult:
         refused=refused,
         message_ms=message,
         profile=asdict(applicant),
-        assumptions_ms=intake_result.assumptions_ms,
+        assumptions_ms=assumptions_ms,
         eligible=[checker.to_dict(r) for r in assessment.eligible],
         gaps=[{"program_id": gp.program_id, "name_ms": gp.name_ms, "agency": gp.agency,
                "amount": gp.amount, "near_miss": gp.near_miss,

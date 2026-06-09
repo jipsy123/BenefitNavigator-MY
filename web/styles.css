@@ -878,3 +878,142 @@ section {
 .hidden {
   display: none !important;
 }
+
+/* === Translation-unavailable notice (shown when MT degrades; no silent mix) === */
+.translation-notice {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: #fff4e0;
+  border: 1px solid #e0a020;
+  color: #7a5200;
+  padding: 0.6rem 0.9rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  margin-bottom: 1rem;
+}
+
+/* ===== Grill (adaptive interview) ========================================= */
+
+.grill {
+  margin-top: 1.5rem;
+  border-top: 1px solid var(--color-border);
+  padding-top: 1.25rem;
+}
+
+/* Progress: a thin bar + a plain-language count of programmes settled/open. */
+.grill-progress { margin-bottom: 1rem; }
+.grill-progress-bar {
+  height: 8px;
+  background: var(--color-primary-light);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.grill-progress-fill {
+  height: 100%;
+  background: var(--color-accent);
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+.grill-progress-text {
+  margin-top: 0.4rem;
+  font-size: 0.9rem;
+  color: var(--color-text-muted);
+}
+
+/* Transcript: a compact log of answered questions. */
+.grill-transcript { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 1rem; }
+.grill-qa {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: baseline;
+  font-size: 0.95rem;
+  padding: 0.35rem 0.6rem;
+  background: var(--color-bg);
+  border-radius: var(--radius-sm);
+}
+.grill-qa-q { color: var(--color-text-muted); }
+.grill-qa-a {
+  font-weight: 700;
+  color: var(--color-accent);
+  margin-left: auto;
+}
+.grill-qa-a.skipped { color: var(--color-text-muted); font-weight: 400; font-style: italic; }
+
+/* The active question card. */
+.grill-q-card {
+  background: var(--color-surface);
+  border: 2px solid var(--color-primary);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+  box-shadow: var(--shadow);
+}
+.grill-q-text {
+  font-size: var(--font-h3);
+  font-weight: 700;
+  color: var(--color-primary-dark);
+  margin-bottom: 0.75rem;
+}
+
+/* The 'why we're asking' chip — the visible reasoning. */
+.grill-why {
+  display: flex;
+  gap: 0.25rem;
+  align-items: flex-start;
+  background: var(--color-accent-light);
+  border-left: 3px solid var(--color-accent);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+  color: var(--color-success);
+}
+.grill-why-icon { flex-shrink: 0; }
+
+/* Answer controls. */
+.grill-answers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+}
+.grill-ans-btn {
+  min-height: var(--tap-min);
+  padding: 0.6rem 1.4rem;
+  font-size: 1rem;
+  font-weight: 700;
+  color: #fff;
+  background: var(--color-primary);
+  border: 2px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--transition);
+}
+.grill-ans-btn:hover { background: var(--color-primary-dark); }
+.grill-ans-btn:focus-visible { outline: 3px solid var(--color-accent); outline-offset: 2px; }
+.grill-skip-btn {
+  color: var(--color-text-muted);
+  background: transparent;
+  border-color: var(--color-border);
+}
+.grill-skip-btn:hover { background: var(--color-bg); color: var(--color-text); }
+.grill-input {
+  min-height: var(--tap-min);
+  padding: 0.6rem 0.75rem;
+  font-size: 1rem;
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  width: 9rem;
+}
+.grill-input:focus-visible { outline: 3px solid var(--color-accent); outline-offset: 1px; border-color: var(--color-primary); }
+.grill-input-prefix { font-weight: 700; color: var(--color-text-muted); }
+
+.grill-done {
+  padding: 1rem 1.25rem;
+  font-weight: 700;
+  color: var(--color-primary-dark);
+  background: var(--color-primary-light);
+  border-radius: var(--radius);
+  text-align: center;
+}
