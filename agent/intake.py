@@ -1,0 +1,68 @@
+"""INTAKE stage — parse a free-text Malay description into a validated Applicant.
+
+The LLM extracts *facts only*; it must not judge eligibility. Output is validated
+through compute.profile.from_dict so a bad extraction fails loudly at the boundary.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from compute.profile import Applicant, from_dict
+
+from . import llm
+
+_INTAKE_SYSTEM = """Anda ialah peringkat INTAKE bagi pembantu bantuan kerajaan untuk rakyat Malaysia.
+Tugas anda: cabut FAKTA berstruktur daripada perihal pengguna. JANGAN menilai kelayakan.
+
+Hasilkan JSON sahaja dengan kunci: "profile", "assumptions_ms", "retrieval_query_ms".
+
+"profile" boleh mengandungi kunci berikut (abaikan yang tidak dinyatakan):
+- citizen (bool) — warganegara Malaysia
+- age (int) — umur
+- marital_status ("single"|"married"|"widowed"|"divorced")
+- is_oku (bool) — orang kurang upaya
+- has_kad_oku (bool) — memegang Kad OKU JKM yang berdaftar
+- unable_to_work (bool) — tidak berupaya bekerja
+- is_working (bool) — sedang bekerja
+- is_carer (bool) — penjaga sepenuh masa OKU/pesakit terlantar
+- has_dependents (bool) — mempunyai anak atau tanggungan
+- individual_income (number) — pendapatan BULANAN individu sendiri (RM)
+- household_income (number) — pendapatan BULANAN seisi rumah (RM)
+- household_size (int) — bilangan ahli isi rumah
+- str_approved (bool) — permohonan STR telah diluluskan
+- ekasih_listed (bool) — tersenarai dalam eKasih
+- ekasih_category ("miskin_tegar"|"miskin"|null)
+
+PERATURAN:
+- Cabut hanya fakta yang dinyatakan atau tersirat dengan jelas. Jangan reka.
+- individual_income = pendapatan sendiri; household_income = seisi rumah. Bezakan dengan teliti.
+- "assumptions_ms": senaraikan andaian/maklumat penting yang tiada (Bahasa Melayu).
+- "retrieval_query_ms": satu ayat carian ringkas Bahasa Melayu tentang situasi ini."""
+
+
+@dataclass(frozen=True)
+class IntakeResult:
+    applicant: Applicant
+    assumptions_ms: tuple[str, ...]
+    retrieval_query_ms: str
+
+
+def run_intake(user_text: str) -> IntakeResult:
+    data = llm.chat_json(_INTAKE_SYSTEM, user_text)
+
+    allowed = set(Applicant.__dataclass_fields__)  # type: ignore[attr-defined]
+    raw = data.get("profile", {}) or {}
+    profile = {k: v for k, v in raw.items() if k in allowed and v is not None}
+
+    # A person's own income cannot exceed their household's; reconcile a partial
+    # extraction so validation doesn't reject an otherwise-fine intake.
+    indiv = float(profile.get("individual_income", 0) or 0)
+    house = float(profile.get("household_income", 0) or 0)
+    if indiv > house:
+        profile["household_income"] = indiv
+
+    applicant = from_dict(profile)
+    assumptions = tuple(data.get("assumptions_ms", []) or [])
+    query = data.get("retrieval_query_ms") or user_text
+    return IntakeResult(applicant=applicant, assumptions_ms=assumptions,
+                        retrieval_query_ms=query)

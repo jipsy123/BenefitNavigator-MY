@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="ms">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="BenefitNavigator Malaysia — Cari bantuan kerajaan yang anda layak. Semak kelayakan bantuan sosial, OKU, dan penjaga." />
+  <title>BenefitNavigator Malaysia</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+
+  <!-- Accessible skip link -->
+  <a href="#main-content" class="sr-status" style="position:static;width:auto;height:auto;clip:auto;overflow:visible;white-space:normal;padding:0.5rem 1rem;background:var(--color-primary);color:#fff;text-decoration:none;border-radius:4px;font-weight:700;">Langkau ke kandungan utama</a>
+
+  <!-- Live region for screen reader announcements -->
+  <div id="sr-status" aria-live="polite" aria-atomic="true" class="sr-status"></div>
+
+  <!-- ===== HEADER ===== -->
+  <header class="site-header" role="banner">
+    <div class="container">
+      <div class="brand">
+        <h1>BenefitNavigator</h1>
+        <p class="tagline">Cari bantuan kerajaan yang anda layak</p>
+      </div>
+      <div class="header-controls">
+        <label for="lang-select" class="sr-status">Pilih bahasa</label>
+        <select id="lang-select" class="lang-select" aria-label="Pilih bahasa paparan">
+          <option value="ms" selected>Bahasa Melayu</option>
+          <option value="en">English</option>
+          <option value="zh-Hans">中文</option>
+          <option value="ta">தமிழ்</option>
+        </select>
+        <button id="btn-text-size" class="btn-text-size" type="button" aria-pressed="false" title="Tukar saiz teks">
+          Teks Besar
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ===== MAIN ===== -->
+  <main id="main-content" role="main">
+    <div class="container">
+
+      <!-- ===== INTAKE SECTION ===== -->
+      <section class="intake-section" aria-labelledby="intake-heading">
+        <div class="card">
+          <h2 id="intake-heading" style="font-size:1.25rem;margin-bottom:1.25rem;color:var(--color-primary-dark);">
+            Semak Kelayakan Bantuan
+          </h2>
+
+          <!-- Example personas -->
+          <span class="personas-label" id="personas-label">Contoh situasi (klik untuk isi):</span>
+          <div class="personas" role="list" aria-labelledby="personas-label">
+            <button type="button" class="persona-btn" role="listitem"
+              data-text="Saya OKU dan tidak boleh bekerja. Saya ada Kad OKU JKM, tiada pendapatan sendiri, tinggal dengan keluarga (pendapatan keluarga RM1,500 sebulan, 4 orang). Umur 35. Apa bantuan yang saya layak?">
+              🧑‍🦽 OKU tiada pendapatan, umur 35, ada Kad OKU, isi rumah RM1,500 (4 orang)
+            </button>
+            <button type="button" class="persona-btn" role="listitem"
+              data-text="Saya ibu tunggal, bekerja, pendapatan isi rumah RM2,800 sebulan, ada 3 anak. Saya layak bantuan apa?">
+              👩 Ibu tunggal bekerja, pendapatan RM2,800, 3 anak
+            </button>
+            <button type="button" class="persona-btn" role="listitem"
+              data-text="Saya menjaga sepenuh masa ibu saya yang terlantar. Pendapatan keluarga RM2,500. Apa bantuan untuk penjaga?">
+              🏠 Penjaga sepenuh masa, pendapatan keluarga RM2,500
+            </button>
+          </div>
+
+          <!-- Text input -->
+          <div class="form-group">
+            <label for="situation-input">Ceritakan keadaan anda</label>
+            <span class="hint" id="situation-hint">
+              Terangkan situasi anda — umur, pendapatan, keluarga, OKU, pekerjaan, dll. Maklumat lebih banyak, keputusan lebih tepat.
+            </span>
+            <textarea
+              id="situation-input"
+              name="situation"
+              rows="5"
+              maxlength="4000"
+              aria-describedby="situation-hint"
+              placeholder="Contoh: Saya berumur 45 tahun, OKU, tiada pendapatan…"
+              spellcheck="false"
+            ></textarea>
+          </div>
+
+          <!-- Submit -->
+          <button
+            id="btn-assess"
+            type="button"
+            class="btn-primary"
+            aria-busy="false"
+            aria-label="Semak kelayakan bantuan anda"
+          >
+            Semak Kelayakan
+          </button>
+
+          <!-- Error message (inline) -->
+          <div id="inline-error" role="alert" class="error-banner hidden" aria-live="assertive">
+            <span class="error-icon" aria-hidden="true">⚠️</span>
+            <span id="inline-error-text"></span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== RESULTS SECTION ===== -->
+      <section id="results" aria-labelledby="results-heading" aria-live="polite">
+        <h2 id="results-heading" class="sr-status">Keputusan Semakan</h2>
+
+        <!-- Groundedness badge -->
+        <div id="groundedness-container"></div>
+
+        <!-- Refusal banner -->
+        <div id="refusal-container"></div>
+
+        <!-- Total monthly banner -->
+        <div id="total-banner-container"></div>
+
+        <!-- Pipeline trace -->
+        <div id="pipeline-container" class="pipeline-section"></div>
+
+        <!-- Message explanation -->
+        <div id="message-container"></div>
+
+        <!-- Assumptions -->
+        <div id="assumptions-container"></div>
+
+        <!-- Eligible benefits -->
+        <div id="eligible-container"></div>
+
+        <!-- Gaps / near-miss -->
+        <div id="gaps-container"></div>
+
+        <!-- Citations -->
+        <div id="citations-container"></div>
+
+      </section>
+
+    </div>
+  </main>
+
+  <!-- ===== FOOTER ===== -->
+  <footer style="background:var(--color-primary-dark);color:rgba(255,255,255,0.8);padding:1.5rem 0;margin-top:2rem;font-size:0.875rem;">
+    <div class="container" style="display:flex;flex-wrap:wrap;gap:1rem;justify-content:space-between;align-items:center;">
+      <p>BenefitNavigator Malaysia &mdash; Untuk maklumat rasmi, hubungi <strong>Talian Kasih 15999</strong></p>
+      <p style="opacity:0.7;">Data sintetik sahaja &mdash; Tidak menyimpan maklumat peribadi</p>
+    </div>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
