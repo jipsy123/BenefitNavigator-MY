@@ -1,16 +1,16 @@
 <!DOCTYPE html>
-<html lang="ms">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="description" content="BenefitNavigator Malaysia — Cari bantuan kerajaan yang anda layak. Semak kelayakan bantuan sosial, OKU, dan penjaga." />
+  <meta name="description" content="BenefitNavigator Malaysia — Find the government aid you qualify for. Check eligibility for social, disability, and carer assistance." />
   <title>BenefitNavigator Malaysia</title>
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
 
   <!-- Accessible skip link -->
-  <a href="#main-content" class="sr-status" style="position:static;width:auto;height:auto;clip:auto;overflow:visible;white-space:normal;padding:0.5rem 1rem;background:var(--color-primary);color:#fff;text-decoration:none;border-radius:4px;font-weight:700;">Langkau ke kandungan utama</a>
+  <a href="#main-content" data-i18n="skip_to_content" class="sr-status" style="position:static;width:auto;height:auto;clip:auto;overflow:visible;white-space:normal;padding:0.5rem 1rem;background:var(--color-primary);color:#fff;text-decoration:none;border-radius:4px;font-weight:700;">Skip to main content</a>
 
   <!-- Live region for screen reader announcements -->
   <div id="sr-status" aria-live="polite" aria-atomic="true" class="sr-status"></div>
@@ -20,18 +20,18 @@
     <div class="container">
       <div class="brand">
         <h1>BenefitNavigator</h1>
-        <p class="tagline">Cari bantuan kerajaan yang anda layak</p>
+        <p class="tagline" data-i18n="tagline">Find the government aid you qualify for</p>
       </div>
       <div class="header-controls">
-        <label for="lang-select" class="sr-status">Pilih bahasa</label>
-        <select id="lang-select" class="lang-select" aria-label="Pilih bahasa paparan">
-          <option value="ms" selected>Bahasa Melayu</option>
-          <option value="en">English</option>
+        <label for="lang-select" data-i18n="lang_label" class="sr-status">Choose language</label>
+        <select id="lang-select" class="lang-select" data-i18n-aria-label="lang_aria" aria-label="Choose display language">
+          <option value="en" selected>English</option>
+          <option value="ms">Bahasa Melayu</option>
           <option value="zh-Hans">中文</option>
           <option value="ta">தமிழ்</option>
         </select>
-        <button id="btn-text-size" class="btn-text-size" type="button" aria-pressed="false" title="Tukar saiz teks">
-          Teks Besar
+        <button id="btn-text-size" class="btn-text-size" type="button" aria-pressed="false" data-i18n="text_size" data-i18n-title="text_size_title" title="Change text size">
+          Large Text
         </button>
       </div>
     </div>
@@ -44,32 +44,35 @@
       <!-- ===== INTAKE SECTION ===== -->
       <section class="intake-section" aria-labelledby="intake-heading">
         <div class="card">
-          <h2 id="intake-heading" style="font-size:1.25rem;margin-bottom:1.25rem;color:var(--color-primary-dark);">
-            Semak Kelayakan Bantuan
+          <h2 id="intake-heading" data-i18n="intake_heading" style="font-size:1.25rem;margin-bottom:1.25rem;color:var(--color-primary-dark);">
+            Check Your Aid Eligibility
           </h2>
 
           <!-- Example personas -->
-          <span class="personas-label" id="personas-label">Contoh situasi (klik untuk isi):</span>
+          <span class="personas-label" id="personas-label" data-i18n="personas_label">Example situations (click to fill):</span>
           <div class="personas" role="list" aria-labelledby="personas-label">
             <button type="button" class="persona-btn" role="listitem"
-              data-text="Saya OKU dan tidak boleh bekerja. Saya ada Kad OKU JKM, tiada pendapatan sendiri, tinggal dengan keluarga (pendapatan keluarga RM1,500 sebulan, 4 orang). Umur 35. Apa bantuan yang saya layak?">
-              🧑‍🦽 OKU tiada pendapatan, umur 35, ada Kad OKU, isi rumah RM1,500 (4 orang)
+              data-i18n="persona_1_label" data-i18n-text="persona_1_text"
+              data-text="I have a disability and I cannot work. I have no income of my own.">
+              🧑‍🦽 Disabled, can't work, no income (sparse — watch it probe)
             </button>
             <button type="button" class="persona-btn" role="listitem"
-              data-text="Saya ibu tunggal, bekerja, pendapatan isi rumah RM2,800 sebulan, ada 3 anak. Saya layak bantuan apa?">
-              👩 Ibu tunggal bekerja, pendapatan RM2,800, 3 anak
+              data-i18n="persona_2_label" data-i18n-text="persona_2_text"
+              data-text="I am a single mother, working, household income RM2,800 a month, with 3 children. What aid do I qualify for?">
+              👩 Single mother working, income RM2,800, 3 children
             </button>
             <button type="button" class="persona-btn" role="listitem"
-              data-text="Saya menjaga sepenuh masa ibu saya yang terlantar. Pendapatan keluarga RM2,500. Apa bantuan untuk penjaga?">
-              🏠 Penjaga sepenuh masa, pendapatan keluarga RM2,500
+              data-i18n="persona_3_label" data-i18n-text="persona_3_text"
+              data-text="I am a full-time carer for my bedridden mother. Household income RM2,500. What aid is there for carers?">
+              🏠 Full-time carer, household income RM2,500
             </button>
           </div>
 
           <!-- Text input -->
           <div class="form-group">
-            <label for="situation-input">Ceritakan keadaan anda</label>
-            <span class="hint" id="situation-hint">
-              Terangkan situasi anda — umur, pendapatan, keluarga, OKU, pekerjaan, dll. Maklumat lebih banyak, keputusan lebih tepat.
+            <label for="situation-input" data-i18n="input_label">Describe your situation</label>
+            <span class="hint" id="situation-hint" data-i18n="input_hint">
+              Describe your situation — age, income, family, disability, employment, etc. The more detail, the more accurate the result.
             </span>
             <textarea
               id="situation-input"
@@ -77,20 +80,23 @@
               rows="5"
               maxlength="4000"
               aria-describedby="situation-hint"
-              placeholder="Contoh: Saya berumur 45 tahun, OKU, tiada pendapatan…"
+              data-i18n-placeholder="input_placeholder"
+              placeholder="Example: I am 45, a person with a disability, with no income…"
               spellcheck="false"
             ></textarea>
           </div>
 
-          <!-- Submit -->
+          <!-- Submit: starts the adaptive interview (grill) -->
           <button
             id="btn-assess"
             type="button"
             class="btn-primary"
             aria-busy="false"
-            aria-label="Semak kelayakan bantuan anda"
+            data-i18n="grill_start_btn"
+            data-i18n-aria-label="submit_aria"
+            aria-label="Check your aid eligibility"
           >
-            Semak Kelayakan
+            Start
           </button>
 
           <!-- Error message (inline) -->
@@ -98,12 +104,22 @@
             <span class="error-icon" aria-hidden="true">⚠️</span>
             <span id="inline-error-text"></span>
           </div>
+
+          <!-- Grill: adaptive one-question-at-a-time interview -->
+          <div id="grill" class="grill hidden">
+            <div id="grill-progress" class="grill-progress" role="status" aria-live="polite"></div>
+            <div id="grill-transcript" class="grill-transcript" role="list"></div>
+            <div id="grill-current" class="grill-current" aria-live="polite"></div>
+          </div>
         </div>
       </section>
 
       <!-- ===== RESULTS SECTION ===== -->
       <section id="results" aria-labelledby="results-heading" aria-live="polite">
-        <h2 id="results-heading" class="sr-status">Keputusan Semakan</h2>
+        <h2 id="results-heading" data-i18n="results_heading" class="sr-status">Assessment Results</h2>
+
+        <!-- Translation-unavailable notice -->
+        <div id="translation-notice-container"></div>
 
         <!-- Groundedness badge -->
         <div id="groundedness-container"></div>
@@ -140,11 +156,12 @@
   <!-- ===== FOOTER ===== -->
   <footer style="background:var(--color-primary-dark);color:rgba(255,255,255,0.8);padding:1.5rem 0;margin-top:2rem;font-size:0.875rem;">
     <div class="container" style="display:flex;flex-wrap:wrap;gap:1rem;justify-content:space-between;align-items:center;">
-      <p>BenefitNavigator Malaysia &mdash; Untuk maklumat rasmi, hubungi <strong>Talian Kasih 15999</strong></p>
-      <p style="opacity:0.7;">Data sintetik sahaja &mdash; Tidak menyimpan maklumat peribadi</p>
+      <p><span data-i18n="footer_official">BenefitNavigator Malaysia — For official information, contact</span> <strong data-i18n="footer_hotline">Talian Kasih 15999</strong></p>
+      <p style="opacity:0.7;" data-i18n="footer_privacy">Synthetic data only — No personal information stored</p>
     </div>
   </footer>
 
+  <script src="/static/i18n.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

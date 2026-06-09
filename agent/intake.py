@@ -45,6 +45,7 @@ class IntakeResult:
     applicant: Applicant
     assumptions_ms: tuple[str, ...]
     retrieval_query_ms: str
+    facts: dict           # pristine extracted facts (only stated keys) — the grill seed
 
 
 def run_intake(user_text: str) -> IntakeResult:
@@ -52,17 +53,26 @@ def run_intake(user_text: str) -> IntakeResult:
 
     allowed = set(Applicant.__dataclass_fields__)  # type: ignore[attr-defined]
     raw = data.get("profile", {}) or {}
-    profile = {k: v for k, v in raw.items() if k in allowed and v is not None}
+    # `facts` = exactly what the model stated. Kept pristine so the grill can treat
+    # unstated fields as UNKNOWN (and ask) rather than as their favourable defaults.
+    facts = {k: v for k, v in raw.items() if k in allowed and v is not None}
 
-    # A person's own income cannot exceed their household's; reconcile a partial
-    # extraction so validation doesn't reject an otherwise-fine intake.
+    # For the one-shot Applicant only: a person's own income cannot exceed the
+    # household's; reconcile a partial extraction so validation accepts it. This
+    # injected value is deliberately NOT part of `facts` (see above).
+    profile = dict(facts)
     indiv = float(profile.get("individual_income", 0) or 0)
     house = float(profile.get("household_income", 0) or 0)
     if indiv > house:
         profile["household_income"] = indiv
 
     applicant = from_dict(profile)
-    assumptions = tuple(data.get("assumptions_ms", []) or [])
+    # The model is asked for a list, but sometimes returns a single string; wrapping
+    # avoids tuple("text") exploding it into one-character "assumptions".
+    raw_assumptions = data.get("assumptions_ms") or []
+    if isinstance(raw_assumptions, str):
+        raw_assumptions = [raw_assumptions]
+    assumptions = tuple(str(a) for a in raw_assumptions)
     query = data.get("retrieval_query_ms") or user_text
     return IntakeResult(applicant=applicant, assumptions_ms=assumptions,
-                        retrieval_query_ms=query)
+                        retrieval_query_ms=query, facts=facts)
