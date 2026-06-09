@@ -1,0 +1,101 @@
+{
+  "_meta": {
+    "description": "Curated, citation-backed eligibility rules for BenefitNavigator Malaysia. Every threshold is either concrete from the gazetted corpus, or (PGK only) an agency-configured reference value. The deterministic checker reads this; the LLM never computes eligibility.",
+    "currency": "MYR",
+    "period": "monthly_unless_noted",
+    "last_reviewed": "2026-06-09"
+  },
+
+  "reference_values": {
+    "pgk_per_capita_monthly": {
+      "value": 1198,
+      "label_ms": "PGK Purata Miskin Per Kapita Semasa",
+      "source": "Agency-configured from the current DOSM Garis Kemiskinan gazette.",
+      "note": "The JKM 2018 guideline cites 'PGK Purata Miskin Per Kapita Semasa' as a rule reference WITHOUT a fixed figure (it updates annually). This default is illustrative and MUST be set by the administering agency from the current DOSM value. It is the only non-corpus number in this file."
+    }
+  },
+
+  "programs": {
+    "jkm_epc": {
+      "name_ms": "Elaun Pekerja Cacat (EPC)",
+      "agency": "JKM",
+      "logic": "all",
+      "amount": { "type": "fixed", "monthly_myr": 400 },
+      "citation": { "doc_name": "jkm_garis_panduan_2018", "locator": "6.2. ELAUN PEKERJA CACAT (EPC)" },
+      "criteria": [
+        { "type": "citizen", "category": "fact", "label_ms": "Warganegara dan bermastautin di Malaysia" },
+        { "type": "age_gte", "value": 16, "category": "fact", "label_ms": "Berumur 16 tahun dan ke atas" },
+        { "type": "flag_true", "flag": "has_kad_oku", "category": "registration", "label_ms": "Pemegang Kad OKU JKM", "gap_action_ms": "Daftar sebagai OKU dan dapatkan Kad OKU di pejabat JKM daerah." },
+        { "type": "flag_true", "flag": "is_working", "category": "fact", "label_ms": "Sedang bekerja di Malaysia" },
+        { "type": "individual_income_lte", "threshold": 1200, "category": "income", "label_ms": "Pendapatan bulanan individu RM1,200 dan ke bawah" }
+      ]
+    },
+
+    "jkm_btb": {
+      "name_ms": "Bantuan OKU Tidak Berupaya Bekerja (BTB)",
+      "agency": "JKM",
+      "logic": "all",
+      "amount": { "type": "fixed", "monthly_myr": 250 },
+      "citation": { "doc_name": "jkm_garis_panduan_2018", "locator": "6.3. BANTUAN OKU TIDAK BERUPAYA BEKERJA (BTB)" },
+      "criteria": [
+        { "type": "citizen", "category": "fact", "label_ms": "Warganegara dan bermastautin di Malaysia" },
+        { "type": "age_gte", "value": 16, "category": "fact", "label_ms": "Berumur 16 tahun dan ke atas" },
+        { "type": "flag_true", "flag": "has_kad_oku", "category": "registration", "label_ms": "Pemegang Kad OKU JKM", "gap_action_ms": "Daftar sebagai OKU dan dapatkan Kad OKU di pejabat JKM daerah." },
+        { "type": "flag_true", "flag": "unable_to_work", "category": "fact", "label_ms": "Tidak berupaya bekerja" },
+        { "type": "individual_income_lte", "ref": "pgk_per_capita_monthly", "category": "income", "label_ms": "Sumber kewangan bulanan individu OKU tidak melebihi PGK per kapita semasa" }
+      ]
+    },
+
+    "jkm_bpt": {
+      "name_ms": "Bantuan Penjagaan OKU Terlantar / Pesakit Kronik Terlantar (BPT)",
+      "agency": "JKM",
+      "logic": "all",
+      "amount": { "type": "fixed", "monthly_myr": 350 },
+      "citation": { "doc_name": "jkm_garis_panduan_2018", "locator": "6.4. BANTUAN PENJAGAAN OKU TERLANTAR/ PESAKIT KRONIK TERLANTAR (BPT)" },
+      "criteria": [
+        { "type": "citizen", "category": "fact", "label_ms": "Warganegara dan bermastautin di Malaysia" },
+        { "type": "flag_true", "flag": "is_carer", "category": "fact", "label_ms": "Penjaga sepenuh masa kepada OKU/pesakit terlantar" },
+        { "type": "household_income_lte", "threshold": 3000, "category": "income", "label_ms": "Pendapatan bulanan isi rumah tidak melebihi RM3,000" }
+      ]
+    },
+
+    "str_household": {
+      "name_ms": "Sumbangan Tunai Rahmah (STR) 2026 — Kategori Isi Rumah",
+      "agency": "LHDN",
+      "logic": "all",
+      "amount": { "type": "range", "monthly_myr_min": 100, "monthly_myr_max": 200, "note_ms": "Amaun mengikut fasa, pendapatan dan bilangan anak." },
+      "citation": { "doc_name": "lhdn_str_application_faq_2026", "locator": "S5" },
+      "criteria": [
+        { "type": "citizen", "category": "fact", "label_ms": "Warganegara Malaysia" },
+        { "type": "household_category", "category": "fact", "label_ms": "Kategori isi rumah (berkahwin atau ibu/bapa tunggal dengan tanggungan)" },
+        { "type": "household_income_lte", "threshold": 5000, "category": "income", "label_ms": "Pendapatan isi rumah RM5,000 dan ke bawah" }
+      ]
+    },
+
+    "str_bujang": {
+      "name_ms": "Sumbangan Tunai Rahmah (STR) 2026 — Kategori Bujang",
+      "agency": "LHDN",
+      "logic": "all",
+      "amount": { "type": "fixed", "monthly_myr": 50, "note_ms": "RM600 setahun, dibayar melalui SARA." },
+      "citation": { "doc_name": "lhdn_str_application_faq_2026", "locator": "S5" },
+      "criteria": [
+        { "type": "citizen", "category": "fact", "label_ms": "Warganegara Malaysia" },
+        { "type": "bujang_category", "category": "fact", "label_ms": "Kategori bujang / tiada pasangan dan tiada tanggungan" },
+        { "type": "str_bujang_age", "category": "fact", "label_ms": "Berumur 21 tahun ke atas (atau 18 tahun ke atas jika OKU berdaftar JKM)" },
+        { "type": "individual_income_lte", "threshold": 2500, "category": "income", "label_ms": "Pendapatan individu RM2,500 dan ke bawah" }
+      ]
+    },
+
+    "sara": {
+      "name_ms": "Sumbangan Asas Rahmah (SARA) 2026",
+      "agency": "LHDN",
+      "logic": "any",
+      "amount": { "type": "range", "monthly_myr_min": 50, "monthly_myr_max": 200, "note_ms": "Miskin Tegar eKasih RM100–RM200/bulan; Miskin eKasih RM50–RM100/bulan; penerima STR mengikut kategori." },
+      "citation": { "doc_name": "lhdn_sara_faq_2026", "locator": "S2" },
+      "criteria": [
+        { "type": "flag_true", "flag": "str_approved", "category": "registration", "label_ms": "Lulus STR 2026 (Isi Rumah / Bujang / Warga Emas)", "gap_action_ms": "Mohon STR 2026 di MyHASiL; kelulusan STR melayakkan SARA secara automatik." },
+        { "type": "flag_true", "flag": "ekasih_listed", "category": "registration", "label_ms": "Tersenarai dalam data Miskin Tegar / Miskin eKasih", "gap_action_ms": "Daftar eKasih melalui pejabat JKM / KEMAS untuk dinilai sebagai isi rumah miskin." }
+      ]
+    }
+  }
+}
