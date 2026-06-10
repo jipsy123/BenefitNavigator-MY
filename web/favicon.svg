@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="BenefitNavigator">
+  <rect width="48" height="48" rx="11" fill="#0D2B6B"/>
+  <path d="M24 4 L26.9 17.1 L38.1 9.9 L30.9 21.1 L44 24 L30.9 26.9 L38.1 38.1 L26.9 30.9 L24 44 L21.1 30.9 L9.9 38.1 L17.1 26.9 L4 24 L17.1 21.1 L9.9 9.9 L21.1 17.1 Z" fill="#F5B700"/>
+  <circle cx="24" cy="24" r="3.6" fill="#0D2B6B"/>
+</svg>

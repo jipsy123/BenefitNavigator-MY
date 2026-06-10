@@ -394,3 +394,81 @@ def test_sanitize_rejects_malformed_value():
         elicit.sanitize_facts({"age": "not-a-number"})
     with pytest.raises(ValueError):
         elicit.sanitize_facts({"household_size": 0})
+
+
+# --- presumption sanitisation (LLM-proposed, user-vetoable soft facts) ------------
+
+def test_presumptions_coerce_values_and_keep_reasons():
+    out = elicit.sanitize_presumptions(
+        {"marital_status": {"value": "single", "reason_ms": "berumur 12 tahun"},
+         "is_working": {"value": "no", "reason_ms": "masih bersekolah"}},
+        facts={})
+    assert out == {
+        "marital_status": {"value": "single", "reason_ms": "berumur 12 tahun"},
+        "is_working": {"value": False, "reason_ms": "masih bersekolah"},
+    }
+
+
+def test_presumptions_never_include_money_fields():
+    # A presumed income of 0 could manufacture a false ELIGIBLE — always ask money.
+    out = elicit.sanitize_presumptions(
+        {"individual_income": {"value": 0, "reason_ms": "kanak-kanak"},
+         "household_income": {"value": 0, "reason_ms": "kanak-kanak"}}, facts={})
+    assert out == {}
+
+
+def test_presumptions_stated_facts_win():
+    out = elicit.sanitize_presumptions(
+        {"marital_status": {"value": "single", "reason_ms": "x"}},
+        facts={"marital_status": "married"})
+    assert out == {}
+
+
+def test_presumptions_drop_unknown_fields_and_malformed_values():
+    # Presumptions are optional hints: a bad one degrades to "ask normally", never 400s.
+    out = elicit.sanitize_presumptions(
+        {"bogus": {"value": True, "reason_ms": "x"},
+         "age": {"value": "not-a-number", "reason_ms": "x"},
+         "household_size": {"value": 4, "reason_ms": "non-askable"},
+         "citizen": "not-a-dict"},
+        facts={})
+    assert out == {}
+
+
+def test_with_presumed_merges_and_stated_wins():
+    merged = elicit.with_presumed(
+        {"age": 12},
+        {"marital_status": {"value": "single", "reason_ms": "x"},
+         "age": {"value": 30, "reason_ms": "ignored — stated wins"}})
+    assert merged == {"age": 12, "marital_status": "single"}
+
+
+def test_presumed_fact_suppresses_question_until_dismissed():
+    # With marital_status presumed, the engine never asks it; dismissing the chip
+    # (removing the key) makes the field UNKNOWN again so it returns to the queue.
+    known = {"citizen": True, "age": 12}
+    presumed = {"marital_status": {"value": "single", "reason_ms": "umur 12"},
+                "has_dependents": {"value": False, "reason_ms": "umur 12"},
+                "is_working": {"value": False, "reason_ms": "umur 12"}}
+    asked: list[str] = []
+    fields_seen = set()
+    facts = elicit.with_presumed(known, presumed)
+    need = elicit.next_field(facts, asked)
+    while need is not None:
+        fields_seen.add(need.field)
+        asked.append(need.field)
+        need = elicit.next_field(facts, asked)
+    assert "marital_status" not in fields_seen
+    assert "has_dependents" not in fields_seen
+
+    # Chip dismissed -> field is genuinely unknown again and can be asked.
+    without_chip = {k: v for k, v in presumed.items() if k != "marital_status"}
+    fields_seen2 = set()
+    asked2: list[str] = []
+    facts2 = elicit.with_presumed(known, without_chip)
+    need = elicit.next_field(facts2, asked2)
+    while need is not None:
+        fields_seen2.add(need.field)
+        asked2.append(need.field)
+        need = elicit.next_field(facts2, asked2)
+    assert "marital_status" in fields_seen2

@@ -5,7 +5,7 @@ through compute.profile.from_dict so a bad extraction fails loudly at the bounda
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from compute.profile import Applicant, from_dict
 
@@ -14,7 +14,7 @@ from . import llm
 _INTAKE_SYSTEM = """Anda ialah peringkat INTAKE bagi pembantu bantuan kerajaan untuk rakyat Malaysia.
 Tugas anda: cabut FAKTA berstruktur daripada perihal pengguna. JANGAN menilai kelayakan.
 
-Hasilkan JSON sahaja dengan kunci: "profile", "assumptions_ms", "retrieval_query_ms".
+Hasilkan JSON sahaja dengan kunci: "profile", "presumed", "assumptions_ms", "retrieval_query_ms".
 
 "profile" boleh mengandungi kunci berikut (abaikan yang tidak dinyatakan):
 - citizen (bool) — warganegara Malaysia
@@ -33,8 +33,19 @@ Hasilkan JSON sahaja dengan kunci: "profile", "assumptions_ms", "retrieval_query
 - ekasih_listed (bool) — tersenarai dalam eKasih
 - ekasih_category ("miskin_tegar"|"miskin"|null)
 
+"presumed" (pilihan): fakta yang TIDAK dinyatakan tetapi hampir pasti benar
+berdasarkan apa yang pengguna ceritakan (cth. umur 12 tahun -> belum berkahwin,
+tiada anak, tidak bekerja). Format setiap entri:
+  {nama_medan: {"value": <nilai>, "reason_ms": "<ayat ringkas Bahasa Melayu yang
+   menyatakan andaian DAN sebabnya, cth. 'Diandaikan belum berkahwin kerana berumur
+   12 tahun'>"}}
+PERATURAN "presumed":
+- Hanya jika hampir pasti benar (melampaui keraguan munasabah). Jika ragu, JANGAN masukkan.
+- JANGAN sekali-kali presumed individual_income atau household_income — sentiasa perlu ditanya.
+- JANGAN masukkan medan yang sudah ada dalam "profile" atau bercanggah dengannya.
+
 PERATURAN:
-- Cabut hanya fakta yang dinyatakan atau tersirat dengan jelas. Jangan reka.
+- Cabut hanya fakta yang dinyatakan atau tersirat dengan jelas dalam "profile". Jangan reka.
 - individual_income = pendapatan sendiri; household_income = seisi rumah. Bezakan dengan teliti.
 - "assumptions_ms": senaraikan andaian/maklumat penting yang tiada (Bahasa Melayu).
 - "retrieval_query_ms": satu ayat carian ringkas Bahasa Melayu tentang situasi ini."""
@@ -46,6 +57,9 @@ class IntakeResult:
     assumptions_ms: tuple[str, ...]
     retrieval_query_ms: str
     facts: dict           # pristine extracted facts (only stated keys) — the grill seed
+    # LLM-proposed soft facts {field: {value, reason_ms}} — pristine; validated by
+    # elicit.sanitize_presumptions at the API boundary.
+    presumed: dict = field(default_factory=dict)
 
 
 def run_intake(user_text: str) -> IntakeResult:
@@ -74,5 +88,7 @@ def run_intake(user_text: str) -> IntakeResult:
         raw_assumptions = [raw_assumptions]
     assumptions = tuple(str(a) for a in raw_assumptions)
     query = data.get("retrieval_query_ms") or user_text
+    raw_presumed = data.get("presumed")
+    presumed = dict(raw_presumed) if isinstance(raw_presumed, dict) else {}
     return IntakeResult(applicant=applicant, assumptions_ms=assumptions,
-                        retrieval_query_ms=query, facts=facts)
+                        retrieval_query_ms=query, facts=facts, presumed=presumed)

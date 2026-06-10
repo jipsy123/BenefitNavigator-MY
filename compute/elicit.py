@@ -320,6 +320,41 @@ def sanitize_facts(raw: Mapping[str, Any]) -> dict:
     return out
 
 
+_REASON_MAX = 200
+
+
+def sanitize_presumptions(raw: Mapping[str, Any], facts: Mapping[str, Any]) -> dict:
+    """Validate untrusted presumed facts (LLM-proposed, client-echoed soft facts).
+
+    Presumptions are optional hints, so anything suspect is *dropped*, never raised:
+    a lost presumption degrades to "ask the question normally". Hard rules:
+      - only askable fields (FIELD_META) — presumptions exist to suppress questions;
+      - never money fields — a presumed income could manufacture a false ELIGIBLE;
+      - stated facts always win — a presumption cannot shadow what the user said.
+    """
+    out: dict = {}
+    for field, entry in (raw or {}).items():
+        meta = FIELD_META.get(field)
+        if meta is None or meta.kind == "money" or field in facts:
+            continue
+        if not isinstance(entry, Mapping):
+            continue
+        try:
+            value = coerce_value(field, entry.get("value"))
+        except ValueError:
+            continue
+        reason = str(entry.get("reason_ms", ""))[:_REASON_MAX]
+        out[field] = {"value": value, "reason_ms": reason}
+    return out
+
+
+def with_presumed(facts: Mapping[str, Any], presumed: Mapping[str, Any]) -> dict:
+    """The engine's view of the world: presumed values filled in, stated facts on top."""
+    merged = {field: entry["value"] for field, entry in presumed.items()}
+    merged.update(facts)
+    return merged
+
+
 def to_applicant(facts: Mapping[str, Any]) -> Applicant:
     """Materialise established facts into a validated Applicant for the pipeline.
 

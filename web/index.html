@@ -4,13 +4,17 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="description" content="BenefitNavigator Malaysia — Find the government aid you qualify for. Check eligibility for social, disability, and carer assistance." />
+  <meta name="theme-color" content="#0D2B6B" />
+  <meta name="color-scheme" content="light dark" />
   <title>BenefitNavigator Malaysia</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+  <link rel="preload" href="/static/fonts/lexend-var.woff2" as="font" type="font/woff2" crossorigin />
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
 
   <!-- Accessible skip link -->
-  <a href="#main-content" data-i18n="skip_to_content" class="sr-status" style="position:static;width:auto;height:auto;clip:auto;overflow:visible;white-space:normal;padding:0.5rem 1rem;background:var(--color-primary);color:#fff;text-decoration:none;border-radius:4px;font-weight:700;">Skip to main content</a>
+  <a href="#main-content" data-i18n="skip_to_content" class="skip-link">Skip to main content</a>
 
   <!-- Live region for screen reader announcements -->
   <div id="sr-status" aria-live="polite" aria-atomic="true" class="sr-status"></div>
@@ -19,8 +23,16 @@
   <header class="site-header" role="banner">
     <div class="container">
       <div class="brand">
-        <h1>BenefitNavigator</h1>
-        <p class="tagline" data-i18n="tagline">Find the government aid you qualify for</p>
+        <!-- The Navigator's Star: the bintang of the Jalur Gemilang as a compass. -->
+        <svg class="brand-emblem" viewBox="0 0 48 48" fill="none" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+          <path d="M24 2 L27.1 16.6 L39.6 8.4 L31.4 20.9 L46 24 L31.4 27.1 L39.6 39.6 L27.1 31.4 L24 46 L20.9 31.4 L8.4 39.6 L16.6 27.1 L2 24 L16.6 20.9 L8.4 8.4 L20.9 16.6 Z" fill="#F5B700" stroke="#FFD75E" stroke-width="0.75" stroke-linejoin="round" />
+          <circle cx="24" cy="24" r="4.6" fill="#0D2B6B" />
+          <circle cx="24" cy="24" r="1.7" fill="#FFD75E" />
+        </svg>
+        <div class="brand-text">
+          <h1 class="wordmark"><span class="wordmark-benefit">Benefit</span><span class="wordmark-nav">Navigator</span></h1>
+          <p class="tagline" data-i18n="tagline">Find the government aid you qualify for</p>
+        </div>
       </div>
       <div class="header-controls">
         <label for="lang-select" data-i18n="lang_label" class="sr-status">Choose language</label>
@@ -44,7 +56,7 @@
       <!-- ===== INTAKE SECTION ===== -->
       <section class="intake-section" aria-labelledby="intake-heading">
         <div class="card">
-          <h2 id="intake-heading" data-i18n="intake_heading" style="font-size:1.25rem;margin-bottom:1.25rem;color:var(--color-primary-dark);">
+          <h2 id="intake-heading" data-i18n="intake_heading">
             Check Your Aid Eligibility
           </h2>
 
@@ -108,6 +120,7 @@
           <!-- Grill: adaptive one-question-at-a-time interview -->
           <div id="grill" class="grill hidden">
             <div id="grill-progress" class="grill-progress" role="status" aria-live="polite"></div>
+            <div id="grill-presumed" class="grill-presumed" role="list"></div>
             <div id="grill-transcript" class="grill-transcript" role="list"></div>
             <div id="grill-current" class="grill-current" aria-live="polite"></div>
           </div>
@@ -154,10 +167,10 @@
   </main>
 
   <!-- ===== FOOTER ===== -->
-  <footer style="background:var(--color-primary-dark);color:rgba(255,255,255,0.8);padding:1.5rem 0;margin-top:2rem;font-size:0.875rem;">
-    <div class="container" style="display:flex;flex-wrap:wrap;gap:1rem;justify-content:space-between;align-items:center;">
+  <footer class="site-footer" role="contentinfo">
+    <div class="container">
       <p><span data-i18n="footer_official">BenefitNavigator Malaysia — For official information, contact</span> <strong data-i18n="footer_hotline">Talian Kasih 15999</strong></p>
-      <p style="opacity:0.7;" data-i18n="footer_privacy">Synthetic data only — No personal information stored</p>
+      <p class="footer-privacy" data-i18n="footer_privacy">Synthetic data only — No personal information stored</p>
     </div>
   </footer>
 

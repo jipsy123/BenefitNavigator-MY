@@ -30,6 +30,7 @@ const citationsContainer    = document.getElementById('citations-container');
 
 const grillPanel       = document.getElementById('grill');
 const grillProgressEl  = document.getElementById('grill-progress');
+const grillPresumedEl  = document.getElementById('grill-presumed');
 const grillTranscriptEl = document.getElementById('grill-transcript');
 const grillCurrentEl   = document.getElementById('grill-current');
 
@@ -43,12 +44,21 @@ let resultCacheByLang  = {};            // lang -> localized result dict
 // language toggle re-renders them instantly with no network call.
 let grillActive       = false;
 let grillFacts        = {};             // established facts so far (Applicant subset)
+let grillPresumed     = {};             // LLM-presumed soft facts {field: {value, reason_ms}}
 let grillAsked        = [];             // fields already asked (incl. skipped)
 let grillQuery        = '';             // Malay retrieval query from /grill/start
 let grillAssumptions  = [];             // intake assumptions carried to /grill/assess
 let grillCurrent      = null;           // the active question object, or null
 let grillTranscript   = [];             // [{field, kind, value, skipped}]
 let grillLastProgress = null;           // last progress dict (for re-render on toggle)
+let grillBusy         = false;          // one in-flight grill call at a time — an answer
+                                        // and a chip-dismissal must never race
+
+// Store the active question stamped with the language its phrased text was
+// generated in — on a language toggle the static template takes over instead.
+function setGrillCurrent(question) {
+  grillCurrent = question ? { ...question, _lang: currentLang } : null;
+}
 
 // Build element safely (no innerHTML). props: class/text/aria/{attr} keys.
 function el(tag, props, children) {
@@ -500,9 +510,9 @@ btnAssess.addEventListener('click', async () => {
   clearResultsUI();
   lastAssessmentText = text;           // the opening paragraph, reused for appeals
   grillActive = true;
-  grillFacts = {}; grillAsked = []; grillQuery = ''; grillAssumptions = [];
+  grillFacts = {}; grillPresumed = {}; grillAsked = []; grillQuery = ''; grillAssumptions = [];
   grillCurrent = null; grillTranscript = []; grillLastProgress = null;
-  [grillProgressEl, grillTranscriptEl, grillCurrentEl].forEach(clearEl);
+  [grillProgressEl, grillPresumedEl, grillTranscriptEl, grillCurrentEl].forEach(clearEl);
 
   try {
     const resp = await fetch('/grill/start', {
@@ -522,13 +532,14 @@ btnAssess.addEventListener('click', async () => {
       return;
     }
     grillFacts = data.facts || {};
+    grillPresumed = data.presumed || {};
     grillAsked = data.asked || [];
     grillQuery = data.retrieval_query_ms || '';
     grillAssumptions = data.assumptions_ms || [];
     grillLastProgress = data.progress || null;
     grillPanel.classList.remove('hidden');
     if (data.done) { await finishGrill(); return; }
-    grillCurrent = data.question;
+    setGrillCurrent(data.question);
     renderGrill(data.progress);
   } catch (err) {
     grillActive = false;
@@ -541,14 +552,18 @@ btnAssess.addEventListener('click', async () => {
 
 // Send one structured answer (or skip) and advance to the next gap.
 async function grillNext(payload) {
+  if (grillBusy) return;
+  grillBusy = true;
   const answered = grillCurrent;                 // the question being answered now
   try {
     const resp = await fetch('/grill/next', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        facts: grillFacts, asked: grillAsked, field: payload.field,
-        value: payload.skip ? null : payload.value, skip: !!payload.skip
+        facts: grillFacts, presumed: grillPresumed, asked: grillAsked,
+        field: payload.field,
+        value: payload.skip ? null : payload.value, skip: !!payload.skip,
+        text: lastAssessmentText, lang: currentLang
       })
     });
     if (!resp.ok) {
@@ -561,18 +576,21 @@ async function grillNext(payload) {
       value: payload.skip ? null : payload.value, skipped: !!payload.skip
     }]);
     grillFacts = data.facts;
+    grillPresumed = data.presumed || {};
     grillAsked = data.asked;
     grillLastProgress = data.progress;
     if (data.done) {
-      grillCurrent = null;
+      setGrillCurrent(null);
       renderGrill(data.progress);
       await finishGrill();
       return;
     }
-    grillCurrent = data.question;
+    setGrillCurrent(data.question);
     renderGrill(data.progress);
   } catch (err) {
     showInlineError(t('err_connection') + ' (' + (err.message || '') + ')');
+  } finally {
+    grillBusy = false;
   }
 }
 
@@ -587,7 +605,7 @@ async function finishGrill() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        facts: grillFacts, retrieval_query_ms: grillQuery,
+        facts: grillFacts, presumed: grillPresumed, retrieval_query_ms: grillQuery,
         assumptions_ms: grillAssumptions, lang: currentLang
       })
     });
@@ -613,8 +631,71 @@ async function finishGrill() {
 
 function renderGrill(progress) {
   renderGrillProgress(progress);
+  renderGrillPresumed();
   renderGrillTranscript();
   renderGrillCurrent();
+}
+
+// ----- Presumption chips: LLM-proposed soft facts the user can veto --------------
+
+function presumedValueLabel(field, value) {
+  if (typeof value === 'boolean') return value ? t('grill_yes') : t('grill_no');
+  if (field === 'marital_status') return t('marital_' + value);
+  return String(value);
+}
+
+function renderGrillPresumed() {
+  clearEl(grillPresumedEl);
+  const fields = Object.keys(grillPresumed);
+  if (!fields.length) return;
+  grillPresumedEl.appendChild(el('div', { class: 'grill-presumed-title',
+    text: t('grill_assumed_title') }));
+  const wrap = el('div', { class: 'grill-presumed-chips' });
+  fields.forEach(field => {
+    const chip = el('span', { class: 'grill-presumed-chip', role: 'listitem' });
+    chip.appendChild(el('span', {
+      text: t('q_' + field) + ' — ' + presumedValueLabel(field, grillPresumed[field].value) }));
+    const x = el('button', { type: 'button', class: 'grill-presumed-x',
+      'aria-label': t('grill_assumed_remove'), text: '✕' });
+    x.addEventListener('click', () => dismissPresumed(field));
+    chip.appendChild(x);
+    wrap.appendChild(chip);
+  });
+  grillPresumedEl.appendChild(wrap);
+}
+
+// Veto one presumption: the field becomes UNKNOWN again, so the engine puts it
+// back in the question queue (a recompute call — no answer is applied). Local
+// state is only committed from the server's response — on failure the chip stays.
+async function dismissPresumed(field) {
+  if (grillBusy) return;
+  grillBusy = true;
+  const nextPresumed = { ...grillPresumed };
+  delete nextPresumed[field];
+  try {
+    const resp = await fetch('/grill/next', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ facts: grillFacts, presumed: nextPresumed, asked: grillAsked,
+        text: lastAssessmentText, lang: currentLang })
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ detail: t('err_server') }));
+      throw new Error(err.detail || 'HTTP ' + resp.status);
+    }
+    const data = await resp.json();
+    grillFacts = data.facts;
+    grillPresumed = data.presumed || {};
+    grillAsked = data.asked;
+    grillLastProgress = data.progress;
+    setGrillCurrent(data.done ? null : data.question);
+    renderGrill(data.progress);
+    if (data.done) { await finishGrill(); }
+  } catch (err) {
+    showInlineError(t('err_connection') + ' (' + (err.message || '') + ')');
+  } finally {
+    grillBusy = false;
+  }
 }
 
 function renderGrillProgress(progress) {
@@ -703,8 +784,12 @@ function renderGrillCurrent() {
   clearEl(grillCurrentEl);
   if (!grillCurrent) return;
   const q = grillCurrent;
+  // Contextual phrasing only while the UI language matches the language it was
+  // generated in; otherwise (toggle, phrasing failure) the static template renders.
+  const qText = (q.question_text && q._lang === currentLang)
+    ? q.question_text : t('q_' + q.field);
   const card = el('div', { class: 'grill-q-card' });
-  card.appendChild(el('div', { class: 'grill-q-text', text: t('q_' + q.field) }));
+  card.appendChild(el('div', { class: 'grill-q-text', text: qText }));
 
   if (q.programs && q.programs.length) {
     const chip = el('div', { class: 'grill-why' });
@@ -719,7 +804,7 @@ function renderGrillCurrent() {
 
   card.appendChild(buildAnswerControls(q));
   grillCurrentEl.appendChild(card);
-  announce(t('q_' + q.field));
+  announce(qText);
 }
 
 function renderResults(result, translationOk) {

@@ -44,3 +44,22 @@ def test_facts_drop_unknown_keys(monkeypatch):
     _patch(monkeypatch, {"profile": {"is_oku": True, "bogus_field": 1},
                          "retrieval_query_ms": "q"})
     assert intake.run_intake("x").facts == {"is_oku": True}
+
+
+def test_presumed_dict_passes_through_pristine(monkeypatch):
+    # Sanitization happens at the API boundary (elicit.sanitize_presumptions);
+    # intake's contract is to surface exactly what the model proposed.
+    presumed = {"marital_status": {"value": "single", "reason_ms": "berumur 12 tahun"}}
+    _patch(monkeypatch, {"profile": {"age": 12}, "presumed": presumed,
+                         "retrieval_query_ms": "q"})
+    result = intake.run_intake("x")
+    assert result.presumed == presumed
+    assert result.facts == {"age": 12}
+
+
+def test_presumed_missing_or_malformed_is_empty_dict(monkeypatch):
+    _patch(monkeypatch, {"profile": {}, "retrieval_query_ms": "q"})
+    assert intake.run_intake("x").presumed == {}
+    _patch(monkeypatch, {"profile": {}, "presumed": ["not", "a", "dict"],
+                         "retrieval_query_ms": "q"})
+    assert intake.run_intake("x").presumed == {}

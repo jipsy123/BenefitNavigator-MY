@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from agent import orchestrator
@@ -18,6 +19,12 @@ from api.app import app
 from compute import elicit
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _no_phrasing(monkeypatch):
+    """Phrasing is an Azure boundary — stub it everywhere; specific tests override."""
+    monkeypatch.setattr(app_module.phrase, "phrase_question", lambda *a, **k: None)
 
 
 def _no_attack(_text):
@@ -145,4 +152,137 @@ def test_assess_runs_pipeline_from_facts(monkeypatch):
 
 def test_assess_rejects_malformed_facts():
     resp = client.post("/grill/assess", json={"facts": {"age": "abc"}, "lang": "ms"})
+    assert resp.status_code == 400
+
+
+# --- presumed facts (LLM-proposed, user-vetoable) ---------------------------------
+
+def _fake_intake_with_presumed(facts: dict, presumed: dict):
+    def run(_text):
+        return IntakeResult(applicant=elicit.to_applicant(facts),
+                            assumptions_ms=(), retrieval_query_ms="q",
+                            facts=dict(facts), presumed=dict(presumed))
+    return run
+
+
+def test_start_sanitizes_and_returns_presumed(monkeypatch):
+    monkeypatch.setattr(app_module.safety, "shield_prompt", _no_attack)
+    monkeypatch.setattr(app_module.intake, "run_intake", _fake_intake_with_presumed(
+        {"age": 12},
+        {"marital_status": {"value": "single", "reason_ms": "berumur 12 tahun"},
+         "individual_income": {"value": 0, "reason_ms": "money: must be dropped"},
+         "age": {"value": 30, "reason_ms": "stated: must be dropped"}}))
+    resp = client.post("/grill/start", json={"text": "saya 12 tahun", "lang": "ms"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["presumed"] == {
+        "marital_status": {"value": "single", "reason_ms": "berumur 12 tahun"}}
+    # A presumed field is never the question the engine asks.
+    assert body["question"]["field"] != "marital_status"
+
+
+def test_next_presumed_field_is_not_asked_and_is_echoed():
+    presumed = {"citizen": {"value": True, "reason_ms": "x"}}
+    resp = client.post("/grill/next", json={
+        "facts": {}, "asked": [], "field": "age", "value": 30,
+        "presumed": presumed})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["presumed"] == presumed
+    assert body["question"]["field"] != "citizen"
+
+
+def test_next_without_field_recomputes_only():
+    # Chip dismissal: the client removes a presumed key and asks for a recompute —
+    # no answer is applied, and the freed field returns to the question queue.
+    with_chip = client.post("/grill/next", json={
+        "facts": {}, "asked": [],
+        "presumed": {"citizen": {"value": True, "reason_ms": "x"}}})
+    without_chip = client.post("/grill/next", json={
+        "facts": {}, "asked": [], "presumed": {}})
+    assert with_chip.status_code == without_chip.status_code == 200
+    assert with_chip.json()["asked"] == []
+    assert with_chip.json()["question"]["field"] != "citizen"
+    assert without_chip.json()["question"]["field"] == "citizen"   # back in the queue
+
+
+def test_assess_merges_presumed_and_reports_assumptions(monkeypatch):
+    fake = orchestrator.PipelineResult(
+        ok=True, refused=False, message_ms="ok", profile={}, assumptions_ms=(),
+        eligible=[], gaps=[], total_monthly_min=0, citations=[],
+        groundedness={"grounded": True}, stages=[])
+    seen: dict = {}
+
+    def fake_run(applicant, *, retrieval_query_ms, assumptions_ms, reasoning="low"):
+        seen["applicant"] = applicant
+        seen["assumptions"] = assumptions_ms
+        return fake
+
+    monkeypatch.setattr(app_module.orchestrator, "run_from_applicant", fake_run)
+    resp = client.post("/grill/assess", json={
+        "facts": {"citizen": True, "age": 12,
+                  "individual_income": 0, "household_income": 900},
+        "presumed": {"marital_status":
+                     {"value": "single",
+                      "reason_ms": "Diandaikan belum berkahwin kerana berumur 12 tahun"}},
+        "assumptions_ms": ["sedia ada"], "lang": "ms"})
+    assert resp.status_code == 200
+    assert seen["applicant"].marital_status == "single"
+    assert seen["assumptions"] == (
+        "sedia ada", "Diandaikan belum berkahwin kerana berumur 12 tahun")
+
+
+# --- contextual phrasing (display-only; template fallback when None) ---------------
+
+def test_next_returns_phrased_question_text(monkeypatch):
+    monkeypatch.setattr(app_module.phrase, "phrase_question",
+                        lambda field, text, known, lang: f"phrased:{field}:{lang}")
+    resp = client.post("/grill/next", json={
+        "facts": {}, "asked": [], "field": "citizen", "value": True,
+        "text": "saya jaga ibu OKU", "lang": "ms"})
+    assert resp.json()["question"]["question_text"] == "phrased:age:ms"
+
+
+def test_next_without_text_skips_phrasing(monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("phrasing must not run without the user's text")
+    monkeypatch.setattr(app_module.phrase, "phrase_question", boom)
+    resp = client.post("/grill/next", json={
+        "facts": {}, "asked": [], "field": "citizen", "value": True})
+    assert resp.json()["question"]["question_text"] is None
+
+
+def test_start_includes_question_text_with_fallback_none(monkeypatch):
+    monkeypatch.setattr(app_module.safety, "shield_prompt", _no_attack)
+    monkeypatch.setattr(app_module.intake, "run_intake", _fake_intake({}))
+    monkeypatch.setattr(app_module.phrase, "phrase_question",
+                        lambda *a, **k: None)                 # phrasing failed
+    resp = client.post("/grill/start", json={"text": "hello", "lang": "en"})
+    body = resp.json()
+    assert body["question"]["field"] == "citizen"
+    assert body["question"]["question_text"] is None          # client uses template
+
+
+def test_start_passes_phrased_text_through(monkeypatch):
+    monkeypatch.setattr(app_module.safety, "shield_prompt", _no_attack)
+    monkeypatch.setattr(app_module.intake, "run_intake", _fake_intake({}))
+    monkeypatch.setattr(app_module.phrase, "phrase_question",
+                        lambda field, text, known, lang: f"phrased:{field}")
+    resp = client.post("/grill/start", json={"text": "hello", "lang": "en"})
+    assert resp.json()["question"]["question_text"] == "phrased:citizen"
+
+
+def test_next_rejects_unsupported_language():
+    resp = client.post("/grill/next", json={
+        "facts": {}, "asked": [], "field": "citizen", "value": True, "lang": "fr"})
+    assert resp.status_code == 400
+
+
+def test_next_rejects_oversized_presumed_and_asked():
+    big = {f"k{i}": {"value": True, "reason_ms": "x"} for i in range(200)}
+    resp = client.post("/grill/next", json={
+        "facts": {}, "asked": [], "presumed": big, "field": "citizen", "value": True})
+    assert resp.status_code == 400
+    resp = client.post("/grill/next", json={
+        "facts": {}, "asked": ["citizen"] * 200, "field": "age", "value": 30})
     assert resp.status_code == 400

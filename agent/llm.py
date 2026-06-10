@@ -43,8 +43,12 @@ def chat_json(system: str, user: str, *, temperature: float = 0.0,
 
 
 def chat_text(system: str, user: str, *, temperature: float = 0.2,
-              max_tokens: int = 1200) -> str:
-    response = client().chat.completions.create(
+              max_tokens: int = 1200, timeout: float | None = None) -> str:
+    """`timeout` (seconds) overrides the client default for latency-sensitive calls
+    (e.g. per-turn grill phrasing, where slow means fall back to a template)."""
+    cli = client() if timeout is None else client().with_options(
+        timeout=timeout, max_retries=0)
+    response = cli.chat.completions.create(
         model=config.AOAI_CHAT_DEPLOYMENT,
         messages=[{"role": "system", "content": system},
                   {"role": "user", "content": user}],

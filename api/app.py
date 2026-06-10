@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from agent import appeal, intake, localize, orchestrator, safety, translate
+from agent import appeal, intake, localize, orchestrator, phrase, safety, translate
 from compute import elicit
 
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
@@ -62,14 +62,20 @@ class GrillStartRequest(BaseModel):
 
 class GrillNextRequest(BaseModel):
     facts: dict = Field(default_factory=dict)
+    presumed: dict = Field(default_factory=dict)
     asked: list[str] = Field(default_factory=list)
-    field: str = Field(min_length=1, max_length=64)
+    # No field = recompute only (e.g. after a presumption chip is dismissed).
+    field: Optional[str] = Field(default=None, min_length=1, max_length=64)
     value: Any = None
     skip: bool = False
+    # Optional context for display-only question phrasing (template fallback if absent).
+    text: str = Field(default="", max_length=_MAX_TEXT)
+    lang: str = "en"
 
 
 class GrillAssessRequest(BaseModel):
     facts: dict = Field(default_factory=dict)
+    presumed: dict = Field(default_factory=dict)
     retrieval_query_ms: str = Field(default="", max_length=_MAX_TEXT)
     assumptions_ms: list[str] = Field(default_factory=list)
     lang: str = "en"
@@ -81,16 +87,23 @@ def _check_lang(lang: str) -> None:
                             detail=f"Unsupported language: {lang!r}")
 
 
-def _question(need: Optional[elicit.FieldNeed]) -> Optional[dict]:
-    """Serialise the engine's next question for the client (which renders it,
-    localized, from its i18n string table keyed by `field`)."""
+def _question(need: Optional[elicit.FieldNeed], *, user_text: str = "",
+              known: Optional[dict] = None, lang: str = "en") -> Optional[dict]:
+    """Serialise the engine's next question for the client. `question_text` is the
+    optional contextual phrasing; when None the client renders its static i18n
+    template keyed by `field` — phrasing can never block or break the grill."""
     if need is None:
         return None
+    question_text = None
+    if user_text:
+        question_text = phrase.phrase_question(need.field, user_text,
+                                               known or {}, lang)
     return {
         "field": need.field,
         "answer_kind": need.answer_kind,
         "skippable": need.skippable,
         "choices": list(need.choices),
+        "question_text": question_text,
         # programmes this answer could unlock — drives the 'why we're asking' chip.
         "programs": [{"program_id": p.program_id, "name_ms": p.name_ms,
                       "amount": p.amount} for p in need.programs],
@@ -150,38 +163,58 @@ def grill_start(req: GrillStartRequest) -> dict:
 
     intake_result = intake.run_intake(req.text)
     facts = elicit.sanitize_facts(intake_result.facts)
+    presumed = elicit.sanitize_presumptions(intake_result.presumed, facts)
     asked: list[str] = []
-    need = elicit.next_field(facts, asked)
+    known = elicit.with_presumed(facts, presumed)
+    need = elicit.next_field(known, asked)
     return {
-        "ok": True, "blocked": False, "facts": facts, "asked": asked,
+        "ok": True, "blocked": False, "facts": facts, "presumed": presumed,
+        "asked": asked,
         "assumptions_ms": list(intake_result.assumptions_ms),
         "retrieval_query_ms": intake_result.retrieval_query_ms,
-        "question": _question(need), "done": need is None,
-        "progress": elicit.progress(facts, asked),
+        "question": _question(need, user_text=req.text, known=known, lang=req.lang),
+        "done": need is None,
+        "progress": elicit.progress(known, asked),
     }
+
+
+def _check_grill_sizes(presumed: dict, asked: list) -> None:
+    """Bound client-echoed collections before any per-item work (DoS guard).
+    Legitimate clients never exceed the askable field count."""
+    cap = 4 * len(elicit.FIELD_META)
+    if len(presumed) > cap or len(asked) > cap:
+        raise ValueError("payload too large")
 
 
 @app.post("/grill/next")
 def grill_next(req: GrillNextRequest) -> dict:
     """Apply one structured answer (deterministic, no LLM) and return the next gap."""
+    _check_lang(req.lang)
     try:
+        _check_grill_sizes(req.presumed, req.asked)
         facts = elicit.sanitize_facts(req.facts)
         asked = list(dict.fromkeys(req.asked))            # dedupe, keep order
-        if req.field not in elicit.FIELD_META:
-            raise ValueError(f"not an askable field: {req.field!r}")
-        if req.skip:
-            if not elicit.FIELD_META[req.field].skippable:
-                raise ValueError(f"{req.field!r} cannot be skipped")
-        else:
-            facts = {**facts, req.field: elicit.coerce_value(req.field, req.value)}
-        if req.field not in asked:
-            asked = asked + [req.field]
+        if req.field is not None:
+            if req.field not in elicit.FIELD_META:
+                raise ValueError(f"not an askable field: {req.field!r}")
+            if req.skip:
+                if not elicit.FIELD_META[req.field].skippable:
+                    raise ValueError(f"{req.field!r} cannot be skipped")
+            else:
+                facts = {**facts, req.field: elicit.coerce_value(req.field, req.value)}
+            if req.field not in asked:
+                asked = asked + [req.field]
+        presumed = elicit.sanitize_presumptions(req.presumed, facts)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    need = elicit.next_field(facts, asked)
-    return {"facts": facts, "asked": asked, "question": _question(need),
-            "done": need is None, "progress": elicit.progress(facts, asked)}
+    known = elicit.with_presumed(facts, presumed)
+    need = elicit.next_field(known, asked)
+    return {"facts": facts, "presumed": presumed, "asked": asked,
+            "question": _question(need, user_text=req.text, known=known,
+                                  lang=req.lang),
+            "done": need is None,
+            "progress": elicit.progress(known, asked)}
 
 
 @app.post("/grill/assess")
@@ -190,14 +223,19 @@ def grill_assess(req: GrillAssessRequest) -> dict:
     free-text intake), then localize. Identical response shape to /assess."""
     _check_lang(req.lang)
     try:
+        _check_grill_sizes(req.presumed, [])
         facts = elicit.sanitize_facts(req.facts)
-        applicant = elicit.to_applicant(facts)
+        presumed = elicit.sanitize_presumptions(req.presumed, facts)
+        applicant = elicit.to_applicant(elicit.with_presumed(facts, presumed))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    # Surviving presumptions are openly part of the verdict's assumption trail.
+    assumptions = tuple(req.assumptions_ms) + tuple(
+        entry["reason_ms"] for entry in presumed.values() if entry["reason_ms"])
     query = req.retrieval_query_ms or "kelayakan bantuan kerajaan Malaysia"
     result = orchestrator.run_from_applicant(
-        applicant, retrieval_query_ms=query, assumptions_ms=tuple(req.assumptions_ms))
+        applicant, retrieval_query_ms=query, assumptions_ms=assumptions)
     canonical = asdict(result)
     display, ok = localize.localize_assess(canonical, req.lang)
     return {"lang": req.lang, "translation_ok": ok,
