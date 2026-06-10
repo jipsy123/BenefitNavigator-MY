@@ -10,6 +10,8 @@
 
 const langSelect      = document.getElementById('lang-select');
 const btnTextSize     = document.getElementById('btn-text-size');
+const btnTheme        = document.getElementById('btn-theme');
+const btnThemeLabel   = document.getElementById('btn-theme-label');
 const situationInput  = document.getElementById('situation-input');
 const btnAssess       = document.getElementById('btn-assess');
 const srStatus        = document.getElementById('sr-status');
@@ -26,6 +28,7 @@ const messageContainer      = document.getElementById('message-container');
 const assumptionsContainer  = document.getElementById('assumptions-container');
 const eligibleContainer     = document.getElementById('eligible-container');
 const gapsContainer         = document.getElementById('gaps-container');
+const nextstepsContainer    = document.getElementById('nextsteps-container');
 const citationsContainer    = document.getElementById('citations-container');
 
 const grillPanel       = document.getElementById('grill');
@@ -33,6 +36,7 @@ const grillProgressEl  = document.getElementById('grill-progress');
 const grillPresumedEl  = document.getElementById('grill-presumed');
 const grillTranscriptEl = document.getElementById('grill-transcript');
 const grillCurrentEl   = document.getElementById('grill-current');
+const intakeCard       = document.querySelector('.intake-card');
 
 let currentLang        = langSelect ? langSelect.value : 'en';
 let lastAssessmentText = '';
@@ -83,22 +87,49 @@ function el(tag, props, children) {
 
 function clearEl(c) { while (c.firstChild) c.removeChild(c.firstChild); }
 
+// Advance the intake journey rail. Steps before the current one (and ALL steps
+// once results are shown) are 'done'; only the current in-progress step is
+// 'active' — so nothing looks active after the journey is complete.
+const PHASE_ORDER = ['describe', 'questions', 'results'];
+function setIntakePhase(phase) {
+  if (!intakeCard) return;
+  const idx = PHASE_ORDER.indexOf(phase);
+  const allDone = phase === 'results';
+  intakeCard.querySelectorAll('.rail-step').forEach(step => {
+    const sIdx = PHASE_ORDER.indexOf(step.dataset.step);
+    const done = allDone || sIdx < idx;
+    step.classList.toggle('is-done', done);
+    step.classList.toggle('is-active', !done && sIdx === idx);
+  });
+}
+
 function announce(msg) {
   srStatus.textContent = '';
   setTimeout(() => { srStatus.textContent = msg; }, 50);
 }
 
+// The headline figure only — the (often long) note is rendered separately so it
+// can wrap instead of overflowing the card. See amountNote().
 function formatAmount(amount) {
   if (!amount) return '';
   if (amount.type === 'fixed') {
     return 'RM' + amount.monthly_myr + t('per_month');
   }
   if (amount.type === 'range') {
-    let str = 'RM' + amount.monthly_myr_min + '–RM' + amount.monthly_myr_max + t('per_month');
-    if (amount.note_ms) str += ' (' + amount.note_ms + ')';  // note_ms is localized server-side
-    return str;
+    return 'RM' + amount.monthly_myr_min + '–RM' + amount.monthly_myr_max + t('per_month');
   }
   return '';
+}
+
+// The localized qualifier note attached to an amount, if any (shown on its own line).
+function amountNote(amount) {
+  return (amount && amount.note_ms) ? amount.note_ms : '';
+}
+
+// Append the amount's qualifier note under a card header, when present.
+function appendAmountNote(card, program) {
+  const note = amountNote(program && program.amount);
+  if (note) card.appendChild(el('div', { class: 'amount-note', text: note }));
 }
 
 // Append a labelled bullet list to a parent element.
@@ -138,6 +169,7 @@ function agencyClass(agency) {
 langSelect.addEventListener('change', () => {
   currentLang = langSelect.value;
   applyChrome(currentLang);
+  refreshThemeLabel();           // the Dark/Light label is dynamic — re-translate it
   // The grill is field-keyed, so re-render it from i18n — no re-fetch, no mixing.
   if (grillActive) { renderGrill(grillLastProgress); }
   if (canonicalMsResult) { renderLocalized(currentLang); }
@@ -176,6 +208,29 @@ btnTextSize.addEventListener('click', () => {
   const isLarge = document.documentElement.classList.toggle('text-large');
   btnTextSize.setAttribute('aria-pressed', String(isLarge));
   announce(isLarge ? t('text_large_on') : t('text_large_off'));
+});
+
+// ===== Theme (light / dark) ================================================
+// The pre-paint <head> script sets the initial .theme-dark class from
+// localStorage or the OS preference; here we only handle the toggle + label.
+const THEME_KEY = 'bn-theme';
+
+function isDarkTheme() {
+  return document.documentElement.classList.contains('theme-dark');
+}
+
+// The label shows the theme you'd switch TO; keep it in sync with state + language.
+function refreshThemeLabel() {
+  if (btnThemeLabel) btnThemeLabel.textContent = isDarkTheme() ? t('theme_light') : t('theme_dark');
+  btnTheme.setAttribute('aria-pressed', String(isDarkTheme()));
+}
+
+btnTheme.addEventListener('click', () => {
+  const next = isDarkTheme() ? 'light' : 'dark';
+  document.documentElement.classList.toggle('theme-dark', next === 'dark');
+  try { localStorage.setItem(THEME_KEY, next); } catch (_) { /* storage blocked — session only */ }
+  refreshThemeLabel();
+  announce(next === 'dark' ? t('theme_dark') : t('theme_light'));
 });
 
 document.querySelectorAll('.persona-btn').forEach(btn => {
@@ -220,29 +275,26 @@ function renderTranslationNotice(ok) {
   translationNoticeContainer.appendChild(notice);
 }
 
+// "How we checked" — a calm verification log: one row per stage, check + name +
+// wrapping summary. Reads as an audit trail rather than a row of loose chips.
 function renderPipeline(stages) {
   clearEl(pipelineContainer);
   if (!stages || stages.length === 0) return;
   pipelineContainer.appendChild(el('h2', { text: t('pipeline_heading') }));
-  const stageList = el('div', { class: 'pipeline-stages', role: 'list' });
+  const list = el('ol', { class: 'pipeline-steps', role: 'list' });
   stages.forEach(stage => {
     const status = stage.status || 'ok';
     const isOk = status === 'ok';
-    const icon = isOk ? '✓' : '✗';
-    const chip = el('div', {
-      class: 'stage-chip ' + status,
-      role: 'listitem',
-      title: stage.summary || stage.name,
-      aria: { label: stage.name + ': ' + status + (stage.summary ? '. ' + stage.summary : '') }
-    });
-    chip.appendChild(el('span', { class: 'stage-icon', 'aria-hidden': 'true', text: icon }));
-    chip.appendChild(el('span', { class: 'stage-name', text: stage.name }));
-    if (stage.summary) {
-      chip.appendChild(el('span', { class: 'stage-summary', text: ' — ' + stage.summary }));
-    }
-    stageList.appendChild(chip);
+    const item = el('li', { class: 'pipeline-step ' + status, role: 'listitem',
+      aria: { label: stage.name + ': ' + status + (stage.summary ? '. ' + stage.summary : '') } });
+    item.appendChild(el('span', { class: 'pipeline-check', 'aria-hidden': 'true', text: isOk ? '✓' : '✗' }));
+    const body = el('div', { class: 'pipeline-step-body' });
+    body.appendChild(el('div', { class: 'pipeline-step-name', text: stage.name }));
+    if (stage.summary) body.appendChild(el('div', { class: 'pipeline-step-summary', text: stage.summary }));
+    item.appendChild(body);
+    list.appendChild(item);
   });
-  pipelineContainer.appendChild(stageList);
+  pipelineContainer.appendChild(list);
 }
 
 function renderRefusal(messageText) {
@@ -283,13 +335,37 @@ function renderTotalBanner(totalMin) {
   totalBannerContainer.appendChild(banner);
 }
 
+// Render a section body as a bulleted list when it uses "- " item markers
+// (the LLM often inlines them), otherwise as a single paragraph.
+function renderMessageBody(card, body) {
+  if (/^-\s+/.test(body)) {
+    const items = body.replace(/^-\s+/, '').split(/\s+-\s+/).map(s => s.trim()).filter(Boolean);
+    const ul = el('ul', { class: 'message-list' });
+    items.forEach(item => ul.appendChild(el('li', { text: item })));
+    card.appendChild(ul);
+  } else {
+    card.appendChild(el('p', { class: 'message-body', text: body }));
+  }
+}
+
 function renderMessage(messageText) {
   clearEl(messageContainer);
   if (!messageText) return;
   const card = el('div', { class: 'message-card' });
-  const p = el('p');
-  p.textContent = messageText;  // textContent only — white-space:pre-wrap in CSS
-  card.appendChild(p);
+  // Break the explanation at its numbered markers ("(1) … (2) … (3) …") so each
+  // section is scannable, and lift the leading "(n) …:" label into a heading.
+  // Falls back to a single block when the text has no such structure.
+  const blocks = messageText.split(/\n(?=\s*\(\d+\))/).map(b => b.trim()).filter(Boolean);
+  blocks.forEach(block => {
+    const m = block.match(/^(\(\d+\)[^\n:]*:)\s*([\s\S]*)$/);
+    if (m) {
+      card.appendChild(el('p', { class: 'message-heading', text: m[1].trim() }));
+      const body = m[2].trim();
+      if (body) renderMessageBody(card, body);
+    } else {
+      renderMessageBody(card, block);
+    }
+  });
   messageContainer.appendChild(card);
 }
 
@@ -307,7 +383,7 @@ function renderAssumptions(assumptions) {
 // Build a program header div (name + agency tag + amount).
 function buildProgramHeader(cls, program) {
   const header = el('div', { class: cls });
-  const nameWrap = el('div');
+  const nameWrap = el('div', { class: 'benefit-name-wrap' });
   nameWrap.appendChild(el('div', { class: 'benefit-name', text: program.name_ms || program.program_id }));
   nameWrap.appendChild(el('span', { class: 'agency-tag ' + agencyClass(program.agency), text: program.agency || '' }));
   header.appendChild(nameWrap);
@@ -324,18 +400,95 @@ function appendCitation(card, citation) {
   card.appendChild(div);
 }
 
+// Minimum monthly value of a programme — used for the optional amount sort.
+function amountValue(program) {
+  const a = program && program.amount;
+  if (!a) return 0;
+  if (a.type === 'fixed') return a.monthly_myr || 0;
+  if (a.type === 'range') return a.monthly_myr_min || 0;
+  return 0;
+}
+
+// The agency a card filters under (real agency string, uppercased; 'OTHER' if none).
+function agencyKey(program) {
+  return (program.agency || 'OTHER').toUpperCase();
+}
+
+function buildEligibleCard(program, order) {
+  const card = el('div', { class: 'benefit-card', 'data-agency': agencyKey(program) });
+  card._order = order;
+  card._amount = amountValue(program);
+  card.appendChild(el('span', { class: 'qualify-badge', text: t('you_qualify_badge') }));
+  card.appendChild(buildProgramHeader('benefit-card-header', program));
+  appendAmountNote(card, program);
+  appendCitation(card, program.citation);
+  return card;
+}
+
+// Agency filter tabs (All + each agency) — only meaningful with 2+ agencies.
+function buildFilterTabs(agencies, cards) {
+  const tabs = el('div', { class: 'filter-tabs', role: 'group', aria: { label: t('filter_label') } });
+  const tabEls = ['ALL', ...agencies].map(key => {
+    const tab = el('button', { type: 'button', class: 'filter-chip',
+      'aria-pressed': key === 'ALL' ? 'true' : 'false',
+      text: key === 'ALL' ? t('filter_all') : key });
+    tab.addEventListener('click', () => {
+      tabEls.forEach(tEl => tEl.setAttribute('aria-pressed', String(tEl === tab)));
+      cards.forEach(card => {
+        card.style.display =
+          (key === 'ALL' || card.getAttribute('data-agency') === key) ? '' : 'none';
+      });
+    });
+    tabs.appendChild(tab);
+    return tab;
+  });
+  return tabs;
+}
+
+// Sort control (best match | highest amount), reordering the cards in place.
+function buildSortControl(cards, list) {
+  const sortWrap = el('div', { class: 'sort-control' });
+  sortWrap.appendChild(el('label', { for: 'eligible-sort', text: t('sort_label') }));
+  const select = el('select', { id: 'eligible-sort', class: 'sort-select' });
+  select.appendChild(el('option', { value: 'best', text: t('sort_best') }));
+  select.appendChild(el('option', { value: 'amount', text: t('sort_amount') }));
+  select.addEventListener('change', () => {
+    const ordered = [...cards].sort(select.value === 'amount'
+      ? (a, b) => b._amount - a._amount
+      : (a, b) => a._order - b._order);
+    ordered.forEach(card => list.appendChild(card));   // re-append in the new order
+  });
+  sortWrap.appendChild(select);
+  return sortWrap;
+}
+
+// Toolbar = filter tabs (2+ agencies) + sort (2+ benefits). Null if neither applies.
+function buildEligibleToolbar(agencies, cards, list) {
+  const showFilter = agencies.length > 1;
+  const showSort = cards.length > 1;
+  if (!showFilter && !showSort) return null;
+  const toolbar = el('div', { class: 'eligible-toolbar' });
+  if (showFilter) toolbar.appendChild(buildFilterTabs(agencies, cards));
+  if (showSort) toolbar.appendChild(buildSortControl(cards, list));
+  return toolbar;
+}
+
 function renderEligible(eligible) {
   clearEl(eligibleContainer);
   if (!eligible || eligible.length === 0) return;
   const section = el('div', { class: 'results-section' });
   section.appendChild(el('h2', { text: t('eligible_heading') + ' (' + eligible.length + ')' }));
+
   const list = el('div', { class: 'benefit-list' });
-  eligible.forEach(program => {
-    const card = el('div', { class: 'benefit-card' });
-    card.appendChild(buildProgramHeader('benefit-card-header', program));
-    appendCitation(card, program.citation);
+  const cards = eligible.map((program, i) => {
+    const card = buildEligibleCard(program, i);
     list.appendChild(card);
+    return card;
   });
+
+  const agencies = [...new Set(eligible.map(agencyKey))];
+  const toolbar = buildEligibleToolbar(agencies, cards, list);
+  if (toolbar) section.appendChild(toolbar);
   section.appendChild(list);
   eligibleContainer.appendChild(section);
 }
@@ -347,8 +500,10 @@ function renderGaps(gaps) {
   section.appendChild(el('h2', { text: t('gaps_heading') + ' (' + gaps.length + ')' }));
   gaps.forEach(gap => {
     const card = el('div', { class: 'gap-card' + (gap.near_miss ? ' near-miss' : '') });
+    if (gap.program_id) card.id = 'gapcard-' + gap.program_id;   // next-steps deep-link target
     if (gap.near_miss) card.appendChild(el('span', { class: 'near-miss-badge', text: t('near_miss_badge') }));
     card.appendChild(buildProgramHeader('gap-card-header', gap));
+    appendAmountNote(card, gap);
 
     appendListSection(card, 'gap-blocking', t('gap_blocking_label'), gap.blocking_ms);
     appendListSection(card, 'gap-actions', t('gap_actions_label'), gap.actions_ms);
@@ -385,6 +540,64 @@ function renderCitations(citations) {
   });
   section.appendChild(ul);
   citationsContainer.appendChild(section);
+}
+
+// ===== Your next steps (derived from results) ===============================
+
+// Smoothly bring a near-miss gap card into view and flash it.
+function scrollToGap(programId) {
+  const target = programId && document.getElementById('gapcard-' + programId);
+  if (!target) { gapsContainer.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
+  target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  target.classList.add('gap-flash');
+  setTimeout(() => target.classList.remove('gap-flash'), 1600);
+}
+
+function buildNextStep(num, titleText, link, isAppeal) {
+  const step = el('li', { class: 'nextstep' + (isAppeal ? ' appeal' : '') });
+  step.appendChild(el('span', { class: 'nextstep-num', 'aria-hidden': 'true', text: String(num) }));
+  const body = el('div', { class: 'nextstep-body' });
+  body.appendChild(el('div', { class: 'nextstep-title', text: titleText }));
+  if (link) body.appendChild(link);
+  step.appendChild(body);
+  return step;
+}
+
+// Concrete actions pulled straight from the result: apply for what you qualify
+// for, and improve eligibility for near-misses (deep-linking to that gap card).
+function renderNextSteps(result) {
+  clearEl(nextstepsContainer);
+  const eligible = result.eligible || [];
+  const nearMiss = (result.gaps || []).filter(g => g.near_miss);
+  if (eligible.length === 0 && nearMiss.length === 0) return;
+
+  const section = el('div', { class: 'results-section' });
+  section.appendChild(el('h2', { text: t('nextsteps_heading') }));
+  const listEl = el('ol', { class: 'nextsteps-list' });
+  let n = 0;
+
+  eligible.forEach(program => {
+    n += 1;
+    const name = program.name_ms || program.program_id || '';
+    const agency = program.agency ? ' (' + program.agency + ')' : '';
+    const url = program.citation && program.citation.source_url;
+    const link = (url && /^https?:\/\//i.test(url))
+      ? el('a', { class: 'nextstep-link', href: url, target: '_blank',
+          rel: 'noopener noreferrer', text: t('step_source_link') })
+      : null;
+    listEl.appendChild(buildNextStep(n, t('step_apply', { name }) + agency, link, false));
+  });
+
+  nearMiss.forEach(gap => {
+    n += 1;
+    const name = gap.name_ms || gap.program_id || '';
+    const jump = el('button', { type: 'button', class: 'nextstep-link', text: t('step_appeal_link') });
+    jump.addEventListener('click', () => scrollToGap(gap.program_id));
+    listEl.appendChild(buildNextStep(n, t('step_improve', { name }), jump, true));
+  });
+
+  section.appendChild(listEl);
+  nextstepsContainer.appendChild(section);
 }
 
 // ===== Appeal flow ==========================================================
@@ -493,7 +706,7 @@ function clearResultsUI() {
   resultsSection.classList.remove('visible');
   [translationNoticeContainer, groundednessContainer, refusalContainer, totalBannerContainer,
    pipelineContainer, messageContainer, assumptionsContainer, eligibleContainer, gapsContainer,
-   citationsContainer].forEach(clearEl);
+   nextstepsContainer, citationsContainer].forEach(clearEl);
 }
 
 // Open the interview from the free-text paragraph, then let the engine drive.
@@ -507,6 +720,7 @@ btnAssess.addEventListener('click', async () => {
   clearInlineError();
   setLoading(true);
   clearResultsUI();
+  setIntakePhase('describe');          // reset the journey rail for a fresh run
   lastAssessmentText = text;           // the opening paragraph, reused for appeals
   grillActive = true;
   grillFacts = {}; grillPresumed = {}; grillAsked = []; grillQuery = '';
@@ -536,6 +750,7 @@ btnAssess.addEventListener('click', async () => {
     grillQuery = data.retrieval_query_ms || '';
     grillLastProgress = data.progress || null;
     grillPanel.classList.remove('hidden');
+    setIntakePhase('questions');         // advance the rail to the interview phase
     if (data.done) { await finishGrill(); return; }
     setGrillCurrent(data.question);
     renderGrill(data.progress);
@@ -806,6 +1021,7 @@ function renderGrillCurrent() {
 }
 
 function renderResults(result, translationOk) {
+  setIntakePhase('results');            // the journey rail reaches its final phase
   renderTranslationNotice(translationOk);
   renderGroundedness(result.groundedness);
 
@@ -824,6 +1040,7 @@ function renderResults(result, translationOk) {
   renderAssumptions(result.assumptions_ms);
   renderEligible(result.eligible);
   renderGaps(result.gaps);
+  renderNextSteps(result);
   renderCitations(result.citations);
 
   resultsSection.classList.add('visible');
@@ -840,3 +1057,5 @@ function renderResults(result, translationOk) {
 
 // ===== Init =================================================================
 applyChrome(currentLang);
+setIntakePhase('describe');     // step 1 active on first paint
+refreshThemeLabel();            // label matches the theme the head script applied

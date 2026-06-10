@@ -9,7 +9,19 @@
   <title>BenefitNavigator Malaysia</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
   <link rel="preload" href="/static/fonts/lexend-var.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="preload" href="/static/MY-Banner.png" as="image" />
   <link rel="stylesheet" href="/static/styles.css" />
+  <!-- Set the theme class before first paint to avoid a flash. Light is the
+       default; dark applies only if the user has explicitly chosen it before. -->
+  <script>
+    (function () {
+      try {
+        if (localStorage.getItem('bn-theme') === 'dark') {
+          document.documentElement.classList.add('theme-dark');
+        }
+      } catch (e) { /* localStorage blocked — stay on the light default */ }
+    })();
+  </script>
 </head>
 <body>
 
@@ -19,33 +31,51 @@
   <!-- Live region for screen reader announcements -->
   <div id="sr-status" aria-live="polite" aria-atomic="true" class="sr-status"></div>
 
-  <!-- ===== HEADER ===== -->
-  <header class="site-header" role="banner">
-    <div class="container">
-      <div class="brand">
-        <!-- The Navigator's Star: the bintang of the Jalur Gemilang as a compass. -->
-        <svg class="brand-emblem" viewBox="0 0 48 48" fill="none" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
-          <path d="M24 2 L27.1 16.6 L39.6 8.4 L31.4 20.9 L46 24 L31.4 27.1 L39.6 39.6 L27.1 31.4 L24 46 L20.9 31.4 L8.4 39.6 L16.6 27.1 L2 24 L16.6 20.9 L8.4 8.4 L20.9 16.6 Z" fill="#F5B700" stroke="#FFD75E" stroke-width="0.75" stroke-linejoin="round" />
-          <circle cx="24" cy="24" r="4.6" fill="#0D2B6B" />
-          <circle cx="24" cy="24" r="1.7" fill="#FFD75E" />
-        </svg>
-        <div class="brand-text">
-          <h1 class="wordmark"><span class="wordmark-benefit">Benefit</span><span class="wordmark-nav">Navigator</span></h1>
-          <p class="tagline" data-i18n="tagline">Find the government aid you qualify for</p>
+  <!-- ===== HERO (Jalur Gemilang + KL skyline banner) ===== -->
+  <header class="hero" role="banner">
+    <div class="hero-scrim" aria-hidden="true"></div>
+    <div class="hero-content">
+
+      <div class="hero-topbar">
+        <div class="brand">
+          <!-- The Navigator's Star: the bintang of the Jalur Gemilang as a compass. -->
+          <svg class="brand-emblem" viewBox="0 0 48 48" fill="none" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+            <path d="M24 2 L27.1 16.6 L39.6 8.4 L31.4 20.9 L46 24 L31.4 27.1 L39.6 39.6 L27.1 31.4 L24 46 L20.9 31.4 L8.4 39.6 L16.6 27.1 L2 24 L16.6 20.9 L8.4 8.4 L20.9 16.6 Z" fill="#F5B700" stroke="#FFD75E" stroke-width="0.75" stroke-linejoin="round" />
+            <circle cx="24" cy="24" r="4.6" fill="#0D2B6B" />
+            <circle cx="24" cy="24" r="1.7" fill="#FFD75E" />
+          </svg>
+          <span class="wordmark"><span class="wordmark-benefit">Benefit</span><span class="wordmark-nav">Navigator</span></span>
+        </div>
+        <div class="header-controls">
+          <label for="lang-select" data-i18n="lang_label" class="sr-status">Choose language</label>
+          <select id="lang-select" class="lang-select" data-i18n-aria-label="lang_aria" aria-label="Choose display language">
+            <option value="en" selected>English</option>
+            <option value="ms">Bahasa Melayu</option>
+            <option value="zh-Hans">中文</option>
+            <option value="ta">தமிழ்</option>
+          </select>
+          <button id="btn-text-size" class="btn-text-size" type="button" aria-pressed="false" data-i18n="text_size" data-i18n-title="text_size_title" title="Change text size">
+            Large Text
+          </button>
+          <button id="btn-theme" class="btn-theme" type="button" aria-pressed="false"
+            data-i18n-aria-label="theme_aria" data-i18n-title="theme_aria"
+            aria-label="Toggle light or dark theme" title="Toggle light or dark theme">
+            <svg class="btn-theme-icon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+              <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2" />
+              <path d="M12 3 A9 9 0 0 1 12 21 Z" fill="currentColor" />
+            </svg>
+            <span id="btn-theme-label">Dark</span>
+          </button>
         </div>
       </div>
-      <div class="header-controls">
-        <label for="lang-select" data-i18n="lang_label" class="sr-status">Choose language</label>
-        <select id="lang-select" class="lang-select" data-i18n-aria-label="lang_aria" aria-label="Choose display language">
-          <option value="en" selected>English</option>
-          <option value="ms">Bahasa Melayu</option>
-          <option value="zh-Hans">中文</option>
-          <option value="ta">தமிழ்</option>
-        </select>
-        <button id="btn-text-size" class="btn-text-size" type="button" aria-pressed="false" data-i18n="text_size" data-i18n-title="text_size_title" title="Change text size">
-          Large Text
-        </button>
+
+      <div class="hero-copy">
+        <h1 class="hero-title" data-i18n="hero_title">Discover benefits you may be eligible for</h1>
+        <p class="hero-subtitle" data-i18n="hero_subtitle">
+          Answer a few simple questions and we'll find the government assistance that matches your profile.
+        </p>
       </div>
+
     </div>
   </header>
 
@@ -53,110 +83,137 @@
   <main id="main-content" role="main">
     <div class="container">
 
-      <!-- ===== INTAKE SECTION ===== -->
+      <!-- ===== INTAKE SECTION (overlaps the hero) ===== -->
       <section class="intake-section" aria-labelledby="intake-heading">
-        <div class="card">
-          <h2 id="intake-heading" data-i18n="intake_heading">
-            Check Your Aid Eligibility
-          </h2>
+        <div class="card intake-card">
 
-          <!-- Example personas -->
-          <span class="personas-label" id="personas-label" data-i18n="personas_label">Example situations (click to fill):</span>
-          <div class="personas" role="list" aria-labelledby="personas-label">
-            <button type="button" class="persona-btn" role="listitem"
-              data-i18n="persona_1_label" data-i18n-text="persona_1_text"
-              data-text="I have a disability and I cannot work. I have no income of my own.">
-              🧑‍🦽 Disabled, can't work, no income (sparse — watch it probe)
+          <!-- Journey rail — the three phases of using the tool. -->
+          <ol class="intake-rail" aria-hidden="true">
+            <li class="rail-step" data-step="describe">
+              <span class="rail-dot">1</span>
+              <span class="rail-label" data-i18n="rail_describe">Your situation</span>
+            </li>
+            <li class="rail-step" data-step="questions">
+              <span class="rail-dot">2</span>
+              <span class="rail-label" data-i18n="rail_questions">A few questions</span>
+            </li>
+            <li class="rail-step" data-step="results">
+              <span class="rail-dot">3</span>
+              <span class="rail-label" data-i18n="rail_results">Your benefits</span>
+            </li>
+          </ol>
+
+          <div class="intake-main">
+            <h2 id="intake-heading" data-i18n="intake_heading">Let's get to know you</h2>
+            <p class="intake-sub" data-i18n="intake_sub">
+              Tell us a little about your situation — we'll ask a few quick questions and match you to the aid you qualify for.
+            </p>
+
+            <!-- Example personas -->
+            <span class="personas-label" id="personas-label" data-i18n="personas_label">Example situations (click to fill):</span>
+            <div class="personas" role="list" aria-labelledby="personas-label">
+              <button type="button" class="persona-btn" role="listitem"
+                data-i18n="persona_1_label" data-i18n-text="persona_1_text"
+                data-text="I have a disability and I cannot work. I have no income of my own.">
+                🧑‍🦽 Disabled, can't work, no income (sparse — watch it probe)
+              </button>
+              <button type="button" class="persona-btn" role="listitem"
+                data-i18n="persona_2_label" data-i18n-text="persona_2_text"
+                data-text="I am a single mother, working, household income RM2,800 a month, with 3 children. What aid do I qualify for?">
+                👩 Single mother working, income RM2,800, 3 children
+              </button>
+              <button type="button" class="persona-btn" role="listitem"
+                data-i18n="persona_3_label" data-i18n-text="persona_3_text"
+                data-text="I am a full-time carer for my bedridden mother. Household income RM2,500. What aid is there for carers?">
+                🏠 Full-time carer, household income RM2,500
+              </button>
+            </div>
+
+            <!-- Text input -->
+            <div class="form-group">
+              <label for="situation-input" data-i18n="input_label">Describe your situation</label>
+              <span class="hint" id="situation-hint" data-i18n="input_hint">
+                Describe your situation — age, income, family, disability, employment, etc. The more detail, the more accurate the result.
+              </span>
+              <textarea
+                id="situation-input"
+                name="situation"
+                rows="5"
+                maxlength="4000"
+                aria-describedby="situation-hint"
+                data-i18n-placeholder="input_placeholder"
+                placeholder="Example: I am 45, a person with a disability, with no income…"
+                spellcheck="false"
+              ></textarea>
+            </div>
+
+            <!-- Submit: starts the adaptive interview (grill) -->
+            <button
+              id="btn-assess"
+              type="button"
+              class="btn-primary"
+              aria-busy="false"
+              data-i18n="grill_start_btn"
+              data-i18n-aria-label="submit_aria"
+              aria-label="Check your aid eligibility"
+            >
+              Start
             </button>
-            <button type="button" class="persona-btn" role="listitem"
-              data-i18n="persona_2_label" data-i18n-text="persona_2_text"
-              data-text="I am a single mother, working, household income RM2,800 a month, with 3 children. What aid do I qualify for?">
-              👩 Single mother working, income RM2,800, 3 children
-            </button>
-            <button type="button" class="persona-btn" role="listitem"
-              data-i18n="persona_3_label" data-i18n-text="persona_3_text"
-              data-text="I am a full-time carer for my bedridden mother. Household income RM2,500. What aid is there for carers?">
-              🏠 Full-time carer, household income RM2,500
-            </button>
+
+            <!-- Error message (inline) -->
+            <div id="inline-error" role="alert" class="error-banner hidden" aria-live="assertive">
+              <span class="error-icon" aria-hidden="true">⚠️</span>
+              <span id="inline-error-text"></span>
+            </div>
+
+            <!-- Grill: adaptive one-question-at-a-time interview -->
+            <div id="grill" class="grill hidden">
+              <div id="grill-progress" class="grill-progress" role="status" aria-live="polite"></div>
+              <div id="grill-presumed" class="grill-presumed" role="list"></div>
+              <div id="grill-transcript" class="grill-transcript" role="list"></div>
+              <div id="grill-current" class="grill-current" aria-live="polite"></div>
+            </div>
           </div>
 
-          <!-- Text input -->
-          <div class="form-group">
-            <label for="situation-input" data-i18n="input_label">Describe your situation</label>
-            <span class="hint" id="situation-hint" data-i18n="input_hint">
-              Describe your situation — age, income, family, disability, employment, etc. The more detail, the more accurate the result.
-            </span>
-            <textarea
-              id="situation-input"
-              name="situation"
-              rows="5"
-              maxlength="4000"
-              aria-describedby="situation-hint"
-              data-i18n-placeholder="input_placeholder"
-              placeholder="Example: I am 45, a person with a disability, with no income…"
-              spellcheck="false"
-            ></textarea>
-          </div>
-
-          <!-- Submit: starts the adaptive interview (grill) -->
-          <button
-            id="btn-assess"
-            type="button"
-            class="btn-primary"
-            aria-busy="false"
-            data-i18n="grill_start_btn"
-            data-i18n-aria-label="submit_aria"
-            aria-label="Check your aid eligibility"
-          >
-            Start
-          </button>
-
-          <!-- Error message (inline) -->
-          <div id="inline-error" role="alert" class="error-banner hidden" aria-live="assertive">
-            <span class="error-icon" aria-hidden="true">⚠️</span>
-            <span id="inline-error-text"></span>
-          </div>
-
-          <!-- Grill: adaptive one-question-at-a-time interview -->
-          <div id="grill" class="grill hidden">
-            <div id="grill-progress" class="grill-progress" role="status" aria-live="polite"></div>
-            <div id="grill-presumed" class="grill-presumed" role="list"></div>
-            <div id="grill-transcript" class="grill-transcript" role="list"></div>
-            <div id="grill-current" class="grill-current" aria-live="polite"></div>
-          </div>
         </div>
       </section>
 
       <!-- ===== RESULTS SECTION ===== -->
+      <!-- DOM order mirrors the reference reading flow: good-news → explanation →
+           benefits → near-miss → next steps → trust appendix. app.js fills each
+           container by id, so this order is purely presentational. -->
       <section id="results" aria-labelledby="results-heading" aria-live="polite">
         <h2 id="results-heading" data-i18n="results_heading" class="sr-status">Assessment Results</h2>
 
         <!-- Translation-unavailable notice -->
         <div id="translation-notice-container"></div>
 
-        <!-- Groundedness badge -->
-        <div id="groundedness-container"></div>
-
         <!-- Refusal banner -->
         <div id="refusal-container"></div>
 
-        <!-- Total monthly banner -->
+        <!-- Total monthly banner — "Good news" -->
         <div id="total-banner-container"></div>
-
-        <!-- Pipeline trace -->
-        <div id="pipeline-container" class="pipeline-section"></div>
 
         <!-- Message explanation -->
         <div id="message-container"></div>
-
-        <!-- Assumptions -->
-        <div id="assumptions-container"></div>
 
         <!-- Eligible benefits -->
         <div id="eligible-container"></div>
 
         <!-- Gaps / near-miss -->
         <div id="gaps-container"></div>
+
+        <!-- Your next steps (derived from results) -->
+        <div id="nextsteps-container"></div>
+
+        <!-- Assumptions -->
+        <div id="assumptions-container"></div>
+
+        <!-- Groundedness badge -->
+        <div id="groundedness-container"></div>
+
+        <!-- Pipeline trace -->
+        <div id="pipeline-container" class="pipeline-section"></div>
 
         <!-- Citations -->
         <div id="citations-container"></div>
