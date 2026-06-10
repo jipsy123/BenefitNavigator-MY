@@ -26,7 +26,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from agent import appeal, intake, localize, orchestrator, phrase, safety, translate
+from agent import (appeal, assumptions, intake, localize, orchestrator, phrase,
+                   safety, translate)
 from compute import elicit
 
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
@@ -77,7 +78,6 @@ class GrillAssessRequest(BaseModel):
     facts: dict = Field(default_factory=dict)
     presumed: dict = Field(default_factory=dict)
     retrieval_query_ms: str = Field(default="", max_length=_MAX_TEXT)
-    assumptions_ms: list[str] = Field(default_factory=list)
     lang: str = "en"
 
 
@@ -226,16 +226,19 @@ def grill_assess(req: GrillAssessRequest) -> dict:
         _check_grill_sizes(req.presumed, [])
         facts = elicit.sanitize_facts(req.facts)
         presumed = elicit.sanitize_presumptions(req.presumed, facts)
-        applicant = elicit.to_applicant(elicit.with_presumed(facts, presumed))
+        known = elicit.with_presumed(facts, presumed)
+        applicant = elicit.to_applicant(known)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    # Surviving presumptions are openly part of the verdict's assumption trail.
-    assumptions = tuple(req.assumptions_ms) + tuple(
+    # Assumptions are derived from what the grill *still* hasn't established (so a fact
+    # the user clarified is never shown as "not specified"), then each surviving
+    # presumption contributes its own reason. The one-shot INTAKE list is not used here.
+    assumption_trail = assumptions.unspecified_ms(known) + tuple(
         entry["reason_ms"] for entry in presumed.values() if entry["reason_ms"])
     query = req.retrieval_query_ms or "kelayakan bantuan kerajaan Malaysia"
     result = orchestrator.run_from_applicant(
-        applicant, retrieval_query_ms=query, assumptions_ms=assumptions)
+        applicant, retrieval_query_ms=query, assumptions_ms=assumption_trail)
     canonical = asdict(result)
     display, ok = localize.localize_assess(canonical, req.lang)
     return {"lang": req.lang, "translation_ok": ok,

@@ -323,6 +323,21 @@ def sanitize_facts(raw: Mapping[str, Any]) -> dict:
 _REASON_MAX = 200
 
 
+def _presumable(field: str, value: Any) -> bool:
+    """Absence-only rule: a presumption may only assert that something is ABSENT
+    (no dependents, not working, no spouse). Positive facts must be stated by the
+    user — intake's stated-facts channel already captures clear implications, so a
+    positive *presumption* is by construction a stereotype ("widow -> probably has
+    kids") and could silently decide a programme against the user. Numbers have no
+    absence direction, so they are never presumable."""
+    meta = FIELD_META[field]
+    if meta.kind == "boolean":
+        return value is False
+    if field == "marital_status":
+        return value == "single"
+    return False
+
+
 def sanitize_presumptions(raw: Mapping[str, Any], facts: Mapping[str, Any]) -> dict:
     """Validate untrusted presumed facts (LLM-proposed, client-echoed soft facts).
 
@@ -330,7 +345,8 @@ def sanitize_presumptions(raw: Mapping[str, Any], facts: Mapping[str, Any]) -> d
     a lost presumption degrades to "ask the question normally". Hard rules:
       - only askable fields (FIELD_META) — presumptions exist to suppress questions;
       - never money fields — a presumed income could manufacture a false ELIGIBLE;
-      - stated facts always win — a presumption cannot shadow what the user said.
+      - stated facts always win — a presumption cannot shadow what the user said;
+      - absence-only values — see _presumable.
     """
     out: dict = {}
     for field, entry in (raw or {}).items():
@@ -342,6 +358,8 @@ def sanitize_presumptions(raw: Mapping[str, Any], facts: Mapping[str, Any]) -> d
         try:
             value = coerce_value(field, entry.get("value"))
         except ValueError:
+            continue
+        if not _presumable(field, value):
             continue
         reason = str(entry.get("reason_ms", ""))[:_REASON_MAX]
         out[field] = {"value": value, "reason_ms": reason}

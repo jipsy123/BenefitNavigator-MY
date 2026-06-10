@@ -181,32 +181,43 @@ def test_start_sanitizes_and_returns_presumed(monkeypatch):
     assert body["question"]["field"] != "marital_status"
 
 
+# With these facts only STR Isi Rumah + STR Bujang stay undecided, and both hinge on
+# marital_status/has_dependents — so marital_status is the engine's next question
+# unless a presumption already covers it (stable-order tiebreak picks it first).
+_FACTS_MARITAL_IS_NEXT = {
+    "citizen": True, "age": 30, "individual_income": 1000, "household_income": 1000,
+    "has_kad_oku": False, "is_carer": False, "str_approved": False,
+    "ekasih_listed": False,
+}
+
+
 def test_next_presumed_field_is_not_asked_and_is_echoed():
-    presumed = {"citizen": {"value": True, "reason_ms": "x"}}
+    presumed = {"marital_status": {"value": "single", "reason_ms": "x"}}
     resp = client.post("/grill/next", json={
-        "facts": {}, "asked": [], "field": "age", "value": 30,
-        "presumed": presumed})
+        "facts": _FACTS_MARITAL_IS_NEXT, "asked": [], "presumed": presumed})
     assert resp.status_code == 200
     body = resp.json()
     assert body["presumed"] == presumed
-    assert body["question"]["field"] != "citizen"
+    assert body["question"]["field"] == "has_dependents"   # marital was suppressed
 
 
 def test_next_without_field_recomputes_only():
     # Chip dismissal: the client removes a presumed key and asks for a recompute —
     # no answer is applied, and the freed field returns to the question queue.
     with_chip = client.post("/grill/next", json={
-        "facts": {}, "asked": [],
-        "presumed": {"citizen": {"value": True, "reason_ms": "x"}}})
+        "facts": _FACTS_MARITAL_IS_NEXT, "asked": [],
+        "presumed": {"marital_status": {"value": "single", "reason_ms": "x"}}})
     without_chip = client.post("/grill/next", json={
-        "facts": {}, "asked": [], "presumed": {}})
+        "facts": _FACTS_MARITAL_IS_NEXT, "asked": [], "presumed": {}})
     assert with_chip.status_code == without_chip.status_code == 200
     assert with_chip.json()["asked"] == []
-    assert with_chip.json()["question"]["field"] != "citizen"
-    assert without_chip.json()["question"]["field"] == "citizen"   # back in the queue
+    assert with_chip.json()["question"]["field"] != "marital_status"
+    assert without_chip.json()["question"]["field"] == "marital_status"  # requeued
 
 
-def test_assess_merges_presumed_and_reports_assumptions(monkeypatch):
+def test_assess_derives_assumptions_from_unknowns_and_appends_presumed(monkeypatch):
+    """Assumptions reflect what the grill still hasn't established, plus each surviving
+    presumption's reason. The stale one-shot INTAKE list is ignored."""
     fake = orchestrator.PipelineResult(
         ok=True, refused=False, message_ms="ok", profile={}, assumptions_ms=(),
         eligible=[], gaps=[], total_monthly_min=0, citations=[],
@@ -225,11 +236,41 @@ def test_assess_merges_presumed_and_reports_assumptions(monkeypatch):
         "presumed": {"marital_status":
                      {"value": "single",
                       "reason_ms": "Diandaikan belum berkahwin kerana berumur 12 tahun"}},
+        # A stale intake list is still sent by older clients — it must be ignored.
         "assumptions_ms": ["sedia ada"], "lang": "ms"})
     assert resp.status_code == 200
     assert seen["applicant"].marital_status == "single"
+    # citizen + income are known; marital_status is presumed -> none of those disclosed.
     assert seen["assumptions"] == (
-        "sedia ada", "Diandaikan belum berkahwin kerana berumur 12 tahun")
+        "Maklumat tentang OKU atau Kad OKU tidak dinyatakan.",
+        "Maklumat tentang tanggungan atau ahli isi rumah tidak dinyatakan.",
+        "Maklumat tentang status STR atau eKasih tidak dinyatakan.",
+        "Diandaikan belum berkahwin kerana berumur 12 tahun")
+    assert "sedia ada" not in seen["assumptions"]
+
+
+def test_assess_omits_assumptions_for_fields_clarified_in_the_grill(monkeypatch):
+    """The bug fix: a field the grill clarified is never reported as 'not specified'."""
+    fake = orchestrator.PipelineResult(
+        ok=True, refused=False, message_ms="ok", profile={}, assumptions_ms=(),
+        eligible=[], gaps=[], total_monthly_min=0, citations=[],
+        groundedness={"grounded": True}, stages=[])
+    seen: dict = {}
+
+    def fake_run(applicant, *, retrieval_query_ms, assumptions_ms, reasoning="low"):
+        seen["assumptions"] = assumptions_ms
+        return fake
+
+    monkeypatch.setattr(app_module.orchestrator, "run_from_applicant", fake_run)
+    resp = client.post("/grill/assess", json={
+        "facts": {"citizen": True, "age": 30, "marital_status": "married",
+                  "is_oku": True, "has_kad_oku": True, "is_working": True,
+                  "individual_income": 1200, "household_income": 1200,
+                  "has_dependents": True, "str_approved": True, "ekasih_listed": True},
+        # Every area is clarified, so even a stale intake list yields no assumptions.
+        "assumptions_ms": ["Kewarganegaraan Malaysia tidak dinyatakan."], "lang": "ms"})
+    assert resp.status_code == 200
+    assert seen["assumptions"] == ()
 
 
 # --- contextual phrasing (display-only; template fallback when None) ---------------

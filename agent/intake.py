@@ -40,9 +40,19 @@ tiada anak, tidak bekerja). Format setiap entri:
    menyatakan andaian DAN sebabnya, cth. 'Diandaikan belum berkahwin kerana berumur
    12 tahun'>"}}
 PERATURAN "presumed":
-- Hanya jika hampir pasti benar (melampaui keraguan munasabah). Jika ragu, JANGAN masukkan.
-- JANGAN sekali-kali presumed individual_income atau household_income — sentiasa perlu ditanya.
+- Setiap presumed MESTI disimpulkan daripada fakta yang DINYATAKAN pengguna (terutamanya
+  umur) dan hampir pasti benar (melampaui keraguan munasabah). Jika ragu, JANGAN masukkan.
+- KETIADAAN MAKLUMAT BUKAN ASAS ANDAIAN. Jika sesuatu tidak disebut, biarkan ia tidak
+  diketahui — sistem akan bertanya. Sebab seperti "tiada maklumat menunjukkan..." DILARANG.
+- Hanya nilai KETIADAAN dibenarkan: boolean mesti false, marital_status mesti "single".
+  Fakta positif (true/berkahwin) mesti dinyatakan oleh pengguna sendiri, bukan diandaikan.
+- Contoh BETUL: "umur 12 tahun" -> marital_status "single", has_dependents false,
+  is_working false.
+- Contoh SALAH: balu/janda -> has_dependents true ATAU false (status perkahwinan tidak
+  memberitahu apa-apa tentang anak); tidak menyebut OKU -> is_oku false (ketiadaan maklumat).
+- JANGAN sekali-kali presumed individual_income, household_income, atau age — sentiasa perlu ditanya.
 - JANGAN masukkan medan yang sudah ada dalam "profile" atau bercanggah dengannya.
+- Kebanyakan kes "presumed" patut KOSONG atau 1-3 entri sahaja.
 
 PERATURAN:
 - Cabut hanya fakta yang dinyatakan atau tersirat dengan jelas dalam "profile". Jangan reka.

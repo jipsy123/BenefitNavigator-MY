@@ -472,3 +472,52 @@ def test_presumed_fact_suppresses_question_until_dismissed():
         asked2.append(need.field)
         need = elicit.next_field(facts2, asked2)
     assert "marital_status" in fields_seen2
+
+
+# --- absence-only presumption guard (widow-stereotype regression) ------------------
+
+def test_presumptions_positive_values_are_dropped():
+    # Stereotype class: "widow -> probably has kids", "has income -> working".
+    # Positive facts must be STATED by the user, never presumed by the LLM.
+    out = elicit.sanitize_presumptions(
+        {"has_dependents": {"value": True, "reason_ms": "status janda"},
+         "is_working": {"value": True, "reason_ms": "ada pendapatan"},
+         "citizen": {"value": True, "reason_ms": "bercakap Melayu"}},
+        facts={})
+    assert out == {}
+
+
+def test_presumptions_marital_status_may_only_be_single():
+    out = elicit.sanitize_presumptions(
+        {"marital_status": {"value": "married", "reason_ms": "x"}}, facts={})
+    assert out == {}
+    out = elicit.sanitize_presumptions(
+        {"marital_status": {"value": "single", "reason_ms": "umur 12"}}, facts={})
+    assert out == {"marital_status": {"value": "single", "reason_ms": "umur 12"}}
+
+
+def test_presumptions_numeric_fields_cannot_be_presumed():
+    # Numbers have no "absence" direction — a guessed age is just a guess.
+    out = elicit.sanitize_presumptions(
+        {"age": {"value": 30, "reason_ms": "x"}}, facts={})
+    assert out == {}
+
+
+def test_widow_regression_presumed_dependents_cannot_block_bujang():
+    # The exact reported bug: intake presumed has_dependents=True for a widow,
+    # which decided STR Bujang INELIGIBLE without ever asking. The guard must
+    # drop it so the engine still asks the dependents question.
+    presumed = elicit.sanitize_presumptions(
+        {"has_dependents": {"value": True,
+                            "reason_ms": "Diandaikan mempunyai tanggungan kerana status janda."}},
+        facts={"marital_status": "widowed"})
+    assert presumed == {}
+    known = elicit.with_presumed({"marital_status": "widowed"}, presumed)
+    asked: list[str] = []
+    fields = set()
+    need = elicit.next_field(known, asked)
+    while need is not None:
+        fields.add(need.field)
+        asked.append(need.field)
+        need = elicit.next_field(known, asked)
+    assert "has_dependents" in fields          # the widow gets ASKED, not stereotyped

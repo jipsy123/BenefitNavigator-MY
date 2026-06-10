@@ -47,7 +47,6 @@ let grillFacts        = {};             // established facts so far (Applicant s
 let grillPresumed     = {};             // LLM-presumed soft facts {field: {value, reason_ms}}
 let grillAsked        = [];             // fields already asked (incl. skipped)
 let grillQuery        = '';             // Malay retrieval query from /grill/start
-let grillAssumptions  = [];             // intake assumptions carried to /grill/assess
 let grillCurrent      = null;           // the active question object, or null
 let grillTranscript   = [];             // [{field, kind, value, skipped}]
 let grillLastProgress = null;           // last progress dict (for re-render on toggle)
@@ -510,7 +509,7 @@ btnAssess.addEventListener('click', async () => {
   clearResultsUI();
   lastAssessmentText = text;           // the opening paragraph, reused for appeals
   grillActive = true;
-  grillFacts = {}; grillPresumed = {}; grillAsked = []; grillQuery = ''; grillAssumptions = [];
+  grillFacts = {}; grillPresumed = {}; grillAsked = []; grillQuery = '';
   grillCurrent = null; grillTranscript = []; grillLastProgress = null;
   [grillProgressEl, grillPresumedEl, grillTranscriptEl, grillCurrentEl].forEach(clearEl);
 
@@ -535,7 +534,6 @@ btnAssess.addEventListener('click', async () => {
     grillPresumed = data.presumed || {};
     grillAsked = data.asked || [];
     grillQuery = data.retrieval_query_ms || '';
-    grillAssumptions = data.assumptions_ms || [];
     grillLastProgress = data.progress || null;
     grillPanel.classList.remove('hidden');
     if (data.done) { await finishGrill(); return; }
@@ -606,7 +604,7 @@ async function finishGrill() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         facts: grillFacts, presumed: grillPresumed, retrieval_query_ms: grillQuery,
-        assumptions_ms: grillAssumptions, lang: currentLang
+        lang: currentLang
       })
     });
     if (!resp.ok) {
