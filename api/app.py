@@ -1,44 +1,53 @@
-"""BenefitNavigator Malaysia — HTTP API.
+"""BenefitNavigator Malaysia — HTTP API (multi-agent /chat surface).
 
 Endpoints:
-  GET  /health           liveness + supported languages
-  POST /assess           run the 5-stage pipeline (always in Malay), return the
-                         verified Malay result localized into the requested language
-  POST /appeal           draft a surat rayuan for one program, localized
-  POST /localize         re-localize an already-computed Malay result/letter into a
-                         new language (used for instant language toggles — no re-run)
-  GET  /                 serve the accessible single-page UI
+  GET  /health    liveness + supported languages
+  POST /chat       advance one conversation turn through the Foundry multi-agent
+                   layer (Orchestrator → A2A specialists → trust-core MCP tools),
+                   with the NON-BYPASSABLE dual safety gate enforced here in FastAPI
+  POST /appeal     draft a surat rayuan for one program, localized (standalone)
+  POST /localize   re-localize an already-verified Malay payload into a new language
+                   (instant language toggles — no re-run, no re-translation)
+  GET  /           serve the accessible single-page UI
+
+Architecture: the LLM agents orchestrate and narrate; they never decide eligibility
+or invent amounts. Verdicts/amounts come from compute/ (recomputed in-process here as
+ground truth), and every agent narrative passes the amount guard + Content Safety
+groundedness gate before a user sees it — else we refuse and route to Talian Kasih
+15999. See mas/orchestrate.py for the per-turn trust flow.
 
 Language model: the pipeline reasons and verifies entirely in Bahasa Melayu; every
-response carries `canonical_ms` (the verified Malay payload) plus `result`/`letter`
-in the requested display language and a `translation_ok` flag. Clients localize
-toggles from `canonical_ms` so we never translate an already-translated language.
-Synthetic PII only — never send a real NRIC/MyKad.
+response carries `canonical_ms` (the verified Malay payload — the source of truth)
+plus the display text localized into the requested language and a `translation_ok`
+flag. Clients re-localize toggles from `canonical_ms` so an already-translated
+language is never re-translated. Synthetic PII only — never send a real NRIC/MyKad.
 """
 from __future__ import annotations
 
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Literal, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from agent import (appeal, assumptions, intake, localize, orchestrator, phrase,
-                   safety, translate)
-from compute import elicit
+from agent import appeal, localize, translate
+from mas import orchestrate
 
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
 _MAX_TEXT = 4000
+_MAX_TOKEN = 32_768            # matches mas.state._MAX_TOKEN_BYTES
 _MAX_PAYLOAD_CHARS = 200_000  # generous cap for a single result/letter payload
 
-app = FastAPI(title="BenefitNavigator Malaysia", version="1.1")
+app = FastAPI(title="BenefitNavigator Malaysia", version="2.0")
 
 
-class AssessRequest(BaseModel):
-    text: str = Field(min_length=1, max_length=_MAX_TEXT)
+class ChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=_MAX_TEXT)
+    # Signed state token from the previous turn; absent/empty starts a new conversation.
+    token: Optional[str] = Field(default=None, max_length=_MAX_TOKEN)
     lang: str = "en"
 
 
@@ -54,60 +63,9 @@ class LocalizeRequest(BaseModel):
     lang: str
 
 
-# --- grill (adaptive interview) request models -----------------------------------
-
-class GrillStartRequest(BaseModel):
-    text: str = Field(min_length=1, max_length=_MAX_TEXT)
-    lang: str = "en"
-
-
-class GrillNextRequest(BaseModel):
-    facts: dict = Field(default_factory=dict)
-    presumed: dict = Field(default_factory=dict)
-    asked: list[str] = Field(default_factory=list)
-    # No field = recompute only (e.g. after a presumption chip is dismissed).
-    field: Optional[str] = Field(default=None, min_length=1, max_length=64)
-    value: Any = None
-    skip: bool = False
-    # Optional context for display-only question phrasing (template fallback if absent).
-    text: str = Field(default="", max_length=_MAX_TEXT)
-    lang: str = "en"
-
-
-class GrillAssessRequest(BaseModel):
-    facts: dict = Field(default_factory=dict)
-    presumed: dict = Field(default_factory=dict)
-    retrieval_query_ms: str = Field(default="", max_length=_MAX_TEXT)
-    lang: str = "en"
-
-
 def _check_lang(lang: str) -> None:
     if lang not in translate.SUPPORTED:
-        raise HTTPException(status_code=400,
-                            detail=f"Unsupported language: {lang!r}")
-
-
-def _question(need: Optional[elicit.FieldNeed], *, user_text: str = "",
-              known: Optional[dict] = None, lang: str = "en") -> Optional[dict]:
-    """Serialise the engine's next question for the client. `question_text` is the
-    optional contextual phrasing; when None the client renders its static i18n
-    template keyed by `field` — phrasing can never block or break the grill."""
-    if need is None:
-        return None
-    question_text = None
-    if user_text:
-        question_text = phrase.phrase_question(need.field, user_text,
-                                               known or {}, lang)
-    return {
-        "field": need.field,
-        "answer_kind": need.answer_kind,
-        "skippable": need.skippable,
-        "choices": list(need.choices),
-        "question_text": question_text,
-        # programmes this answer could unlock — drives the 'why we're asking' chip.
-        "programs": [{"program_id": p.program_id, "name_ms": p.name_ms,
-                      "amount": p.amount} for p in need.programs],
-    }
+        raise HTTPException(status_code=400, detail=f"Unsupported language: {lang!r}")
 
 
 @app.get("/health")
@@ -115,18 +73,25 @@ def health() -> dict:
     return {"status": "ok", "languages": list(translate.SUPPORTED)}
 
 
-@app.post("/assess")
-def assess(req: AssessRequest) -> dict:
+@app.post("/chat")
+def chat(req: ChatRequest) -> dict:
+    """One conversation turn. The agents ask / assess / escalate; the trust spine +
+    dual gate here guarantee no fabricated amount or ungrounded claim reaches the
+    user. Returns the new state `token` (carry it back next turn) plus the localized
+    reply and, on an assessment turn, the verified verdicts (`result` + `canonical_ms`)."""
     _check_lang(req.lang)
-    result = orchestrator.run(req.text)
-    canonical = asdict(result)
-    display, ok = localize.localize_assess(canonical, req.lang)
-    return {"lang": req.lang, "translation_ok": ok,
-            "result": display, "canonical_ms": canonical}
+    try:
+        turn = orchestrate.run_chat(req.message, req.token, req.lang)
+    except ValueError as exc:                       # invalid/expired state token
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return asdict(turn)
 
 
 @app.post("/appeal")
 def draft_appeal(req: AppealRequest) -> dict:
+    """Draft a surat rayuan for one near-miss programme, localized. Standalone of the
+    chat flow; the letter is grounded in the citizen's stated facts + the programme's
+    cited criteria."""
     _check_lang(req.lang)
     try:
         letter = appeal.draft(req.text, req.program_id)
@@ -141,7 +106,7 @@ def draft_appeal(req: AppealRequest) -> dict:
 @app.post("/localize")
 def relocalize(req: LocalizeRequest) -> dict:
     """Re-localize a canonical Malay payload into `lang`. Stateless: the client
-    supplies the Malay payload it cached from /assess or /appeal."""
+    supplies the Malay payload it cached from a /chat assessment or /appeal."""
     _check_lang(req.lang)
     if len(str(req.payload)) > _MAX_PAYLOAD_CHARS:
         raise HTTPException(status_code=413, detail="Payload too large.")
@@ -150,99 +115,6 @@ def relocalize(req: LocalizeRequest) -> dict:
         return {"lang": req.lang, "translation_ok": ok, "result": display}
     display, ok = localize.localize_appeal(req.payload, req.lang)
     return {"lang": req.lang, "translation_ok": ok, "letter": display}
-
-
-@app.post("/grill/start")
-def grill_start(req: GrillStartRequest) -> dict:
-    """Open the interview: shield the free-text paragraph, extract whatever facts it
-    states, then let the deterministic engine pick the first decision-relevant gap."""
-    _check_lang(req.lang)
-    shield = safety.shield_prompt(req.text)
-    if shield.available and shield.attack_detected:
-        return {"ok": False, "blocked": True}
-
-    intake_result = intake.run_intake(req.text)
-    facts = elicit.sanitize_facts(intake_result.facts)
-    presumed = elicit.sanitize_presumptions(intake_result.presumed, facts)
-    asked: list[str] = []
-    known = elicit.with_presumed(facts, presumed)
-    need = elicit.next_field(known, asked)
-    return {
-        "ok": True, "blocked": False, "facts": facts, "presumed": presumed,
-        "asked": asked,
-        "assumptions_ms": list(intake_result.assumptions_ms),
-        "retrieval_query_ms": intake_result.retrieval_query_ms,
-        "question": _question(need, user_text=req.text, known=known, lang=req.lang),
-        "done": need is None,
-        "progress": elicit.progress(known, asked),
-    }
-
-
-def _check_grill_sizes(presumed: dict, asked: list) -> None:
-    """Bound client-echoed collections before any per-item work (DoS guard).
-    Legitimate clients never exceed the askable field count."""
-    cap = 4 * len(elicit.FIELD_META)
-    if len(presumed) > cap or len(asked) > cap:
-        raise ValueError("payload too large")
-
-
-@app.post("/grill/next")
-def grill_next(req: GrillNextRequest) -> dict:
-    """Apply one structured answer (deterministic, no LLM) and return the next gap."""
-    _check_lang(req.lang)
-    try:
-        _check_grill_sizes(req.presumed, req.asked)
-        facts = elicit.sanitize_facts(req.facts)
-        asked = list(dict.fromkeys(req.asked))            # dedupe, keep order
-        if req.field is not None:
-            if req.field not in elicit.FIELD_META:
-                raise ValueError(f"not an askable field: {req.field!r}")
-            if req.skip:
-                if not elicit.FIELD_META[req.field].skippable:
-                    raise ValueError(f"{req.field!r} cannot be skipped")
-            else:
-                facts = {**facts, req.field: elicit.coerce_value(req.field, req.value)}
-            if req.field not in asked:
-                asked = asked + [req.field]
-        presumed = elicit.sanitize_presumptions(req.presumed, facts)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    known = elicit.with_presumed(facts, presumed)
-    need = elicit.next_field(known, asked)
-    return {"facts": facts, "presumed": presumed, "asked": asked,
-            "question": _question(need, user_text=req.text, known=known,
-                                  lang=req.lang),
-            "done": need is None,
-            "progress": elicit.progress(known, asked)}
-
-
-@app.post("/grill/assess")
-def grill_assess(req: GrillAssessRequest) -> dict:
-    """Run the gathered profile through the SAME pipeline as /assess (skipping the
-    free-text intake), then localize. Identical response shape to /assess."""
-    _check_lang(req.lang)
-    try:
-        _check_grill_sizes(req.presumed, [])
-        facts = elicit.sanitize_facts(req.facts)
-        presumed = elicit.sanitize_presumptions(req.presumed, facts)
-        known = elicit.with_presumed(facts, presumed)
-        applicant = elicit.to_applicant(known)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    # Assumptions are derived from what the grill *still* hasn't established (so a fact
-    # the user clarified is never shown as "not specified"), then each surviving
-    # presumption contributes its own reason. The one-shot INTAKE list is not used here.
-    assumption_trail = assumptions.unspecified_ms(known) + tuple(
-        entry["reason_ms"] for entry in presumed.values() if entry["reason_ms"])
-    query = req.retrieval_query_ms or "kelayakan bantuan kerajaan Malaysia"
-    result = orchestrator.run_from_applicant(
-        applicant, retrieval_query_ms=query, assumptions_ms=assumption_trail)
-    canonical = asdict(result)
-    display, ok = localize.localize_assess(canonical, req.lang)
-    return {"lang": req.lang, "translation_ok": ok,
-            "result": display, "canonical_ms": canonical}
 
 
 @app.get("/")

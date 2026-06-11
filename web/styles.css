@@ -719,6 +719,7 @@ section { margin-bottom: 2rem; }
   max-width: 68ch;            /* readable line length — stops the wall-of-text feel */
   margin-top: 0.4rem;
   overflow-wrap: break-word;
+  white-space: pre-line;      /* honour single newlines the agent writes (no wall-of-text) */
 }
 .message-card .message-list {
   list-style: disc;
@@ -1306,8 +1307,15 @@ section { margin-bottom: 2rem; }
 }
 .grill-why-icon { flex-shrink: 0; }
 
-/* Answer controls. */
+/* Answer controls: a primary action row (chips or number field) and, for chip
+   questions, a clearly-subordinate free-text "Other" escape hatch below it. */
 .grill-answers {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+  margin-top: 0.25rem;
+}
+.grill-primary-answers {
   display: flex;
   flex-wrap: wrap;
   gap: 0.6rem;
@@ -1315,7 +1323,77 @@ section { margin-bottom: 2rem; }
 }
 .grill-ans-btn {
   min-height: var(--tap-min);
-  padding: 0.6rem 1.5rem;
+  padding: 0.7rem 1.6rem;
+  font-size: 1rem;
+  font-weight: 700;
+  font-family: inherit;
+  color: #fff;
+  background: var(--color-primary);
+  border: 2px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition), transform var(--transition);
+}
+.grill-ans-btn:hover {
+  background: var(--color-primary-dark);
+  border-color: var(--color-primary-dark);
+  transform: translateY(-1px);
+}
+.grill-ans-btn:active { transform: translateY(0); }
+/* Skip is tertiary — a quiet ghost button, visually distinct from the real answers. */
+.grill-skip-btn {
+  color: var(--color-text-muted);
+  background: transparent;
+  border-color: var(--color-border);
+  font-weight: 600;
+}
+.grill-skip-btn:hover {
+  background: var(--color-bg-2);
+  color: var(--color-text);
+  border-color: var(--color-border);
+  transform: none;
+}
+
+/* Number / money field: optional RM prefix + input + submit as one cohesive control. */
+.grill-num-field {
+  display: flex;
+  align-items: stretch;
+  gap: 0.5rem;
+  width: 100%;
+  max-width: 22rem;
+}
+.grill-num-prefix {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 0.9rem;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  background: var(--color-bg-2);
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+.grill-num-input {
+  flex: 1;
+  min-width: 0;
+  min-height: var(--tap-min);
+  padding: 0.6rem 0.85rem;
+  font-size: 1rem;
+  font-family: inherit;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+.grill-num-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 4px rgba(13,43,107,0.12);
+}
+.grill-num-send {
+  flex-shrink: 0;
+  min-height: var(--tap-min);
+  padding: 0 1.4rem;
   font-size: 1rem;
   font-weight: 700;
   font-family: inherit;
@@ -1326,29 +1404,79 @@ section { margin-bottom: 2rem; }
   cursor: pointer;
   transition: background var(--transition), transform var(--transition);
 }
-.grill-ans-btn:hover { background: var(--color-primary-dark); transform: translateY(-1px); }
-.grill-skip-btn {
-  color: var(--color-text-muted);
-  background: transparent;
-  border-color: var(--color-border);
+.grill-num-send:hover {
+  background: var(--color-primary-dark);
+  border-color: var(--color-primary-dark);
+  transform: translateY(-1px);
 }
-.grill-skip-btn:hover { background: var(--color-bg-2); color: var(--color-text); }
-.grill-input {
+
+/* "Other" escape hatch: a quiet "or" divider, a muted label, and a clean input + send
+   that matches the design system (was previously unstyled → a dark cramped browser box). */
+.grill-other { display: flex; flex-direction: column; gap: 0.55rem; }
+.grill-or {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+}
+.grill-or::before,
+.grill-or::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--color-border);
+}
+.grill-or-text { letter-spacing: 0.02em; }
+.grill-other-label {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+.grill-other-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+.grill-other-input {
+  flex: 1;
+  min-width: 0;
   min-height: var(--tap-min);
-  padding: 0.6rem 0.8rem;
+  padding: 0.65rem 0.9rem;
   font-size: 1rem;
   font-family: inherit;
+  color: var(--color-text);
+  background: var(--color-surface);
   border: 2px solid var(--color-border);
   border-radius: var(--radius-sm);
-  width: 9.5rem;
   transition: border-color var(--transition), box-shadow var(--transition);
 }
-.grill-input:focus {
+.grill-other-input::placeholder { color: var(--color-text-muted); opacity: 0.85; }
+.grill-other-input:focus {
   outline: none;
   border-color: var(--color-primary);
   box-shadow: 0 0 0 4px rgba(13,43,107,0.12);
 }
-.grill-input-prefix { font-weight: 700; color: var(--color-text-muted); }
+/* Send is subordinate to the chips: an outline button, not a second solid CTA. */
+.grill-other-send {
+  flex-shrink: 0;
+  min-height: var(--tap-min);
+  padding: 0 1.25rem;
+  font-size: 0.95rem;
+  font-weight: 700;
+  font-family: inherit;
+  color: var(--color-primary);
+  background: var(--color-surface);
+  border: 2px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition), transform var(--transition);
+}
+.grill-other-send:hover {
+  background: var(--color-primary);
+  color: #fff;
+  transform: translateY(-1px);
+}
 
 .grill-done {
   padding: 1rem 1.25rem;

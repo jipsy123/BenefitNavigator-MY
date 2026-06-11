@@ -31,6 +31,15 @@ SEMANTIC_CONFIG = "sem"
 KNOWLEDGE_SOURCE = "benefitnav-ks"
 KNOWLEDGE_BASE = "benefitnav-kb"
 
+# --- Foundry Agent Service (multi-agent A2A layer, mas/) ---
+FOUNDRY_PROJECT = "benefitnav-proj"
+FOUNDRY_PROJECT_ENDPOINT = (
+    f"https://{AOAI_ACCOUNT}.services.ai.azure.com/api/projects/{FOUNDRY_PROJECT}"
+)
+# Scopes for `az account get-access-token` when calling Foundry data-plane / ARM.
+FOUNDRY_DATAPLANE_SCOPE = "https://ai.azure.com/.default"
+ARM_SCOPE = "https://management.azure.com/.default"
+
 # Search REST api-versions: index/docs are GA; knowledge source/base are preview.
 SEARCH_API_INDEX = "2024-07-01"
 SEARCH_API_KS = "2026-04-01"
@@ -68,7 +77,15 @@ def _az(*args: str) -> str:
 
 @functools.lru_cache(maxsize=1)
 def aoai_key() -> str:
-    """Azure OpenAI admin key (cached for the process lifetime)."""
+    """Azure OpenAI admin key (cached for the process lifetime).
+
+    Prefers the BENEFITNAV_AOAI_KEY env var (set in hosted/container deploys where
+    the Azure CLI is unavailable); otherwise fetched via `az` — the local default.
+    Either way no key is committed to the repo.
+    """
+    env = os.environ.get("BENEFITNAV_AOAI_KEY")
+    if env:
+        return env
     return _az(
         "cognitiveservices", "account", "keys", "list",
         "-g", RESOURCE_GROUP, "-n", AOAI_ACCOUNT,
@@ -78,7 +95,15 @@ def aoai_key() -> str:
 
 @functools.lru_cache(maxsize=1)
 def search_key() -> str:
-    """Azure AI Search primary admin key (cached for the process lifetime)."""
+    """Azure AI Search primary admin key (cached for the process lifetime).
+
+    Prefers the BENEFITNAV_SEARCH_KEY env var (set in hosted/container deploys
+    where the Azure CLI is unavailable); otherwise fetched via `az` — the local
+    default. Either way no key is committed to the repo.
+    """
+    env = os.environ.get("BENEFITNAV_SEARCH_KEY")
+    if env:
+        return env
     return _az(
         "search", "admin-key", "show",
         "-g", RESOURCE_GROUP, "--service-name", SEARCH_SERVICE,

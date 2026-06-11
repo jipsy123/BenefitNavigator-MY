@@ -9,6 +9,9 @@ caller can fall back to Malay *visibly* rather than emit a half-translated mix.
 """
 from __future__ import annotations
 
+import html
+import re
+
 import requests
 
 from ingest import config
@@ -21,20 +24,61 @@ _TIMEOUT = 30
 _MAX_ITEMS = 900
 _MAX_CHARS = 45_000
 
+# Proper nouns that must survive translation verbatim — identifiers with no English
+# equivalent: the crisis hotline NAME (which must stay dialable/recognisable) and the
+# government system/document names. Without protection the Translator mangles them
+# (observed: "Talian Kasih" -> "Línea Kasih"). We send these wrapped in Azure
+# Translator's `class="notranslate"` markup (textType=html), which it keeps verbatim.
+#
+# Agency CODES (JKM, LHDN) are deliberately NOT protected: in prose their English
+# expansions are acceptable ("IRB" for LHDN), the agency *tags* on result cards aren't
+# translated at all, and protecting a bare acronym mid-sentence makes the Translator
+# abut it against the next word ("JKMoffice"). "Talian Kasih" is always followed by the
+# number 15999, so it never suffers that spacing artifact.
+# Longest-first so multi-word terms match before any substring (e.g. eKasih vs Kasih).
+_PROTECTED_TERMS = (
+    "Talian Kasih", "eKasih", "MyKad", "MyKID",
+)
+_PROTECT_RE = re.compile("|".join(re.escape(t) for t in
+                                  sorted(_PROTECTED_TERMS, key=len, reverse=True)))
+# Match Azure's returned notranslate spans (it may reorder/extend attributes) + <br>.
+_SPAN_RE = re.compile(r'<span[^>]*\bnotranslate\b[^>]*>(.*?)</span>', re.DOTALL | re.IGNORECASE)
+_BR_RE = re.compile(r'<br\s*/?>', re.IGNORECASE)
+
+
+def _protect(text: str) -> str:
+    """Escape the text as HTML, keep newlines as <br>, and wrap protected proper nouns
+    in notranslate spans — the form Azure Translator honours with textType=html."""
+    escaped = html.escape(text, quote=False)                 # & < >  (terms are ASCII-safe)
+    escaped = escaped.replace("\n", "<br>")
+    return _PROTECT_RE.sub(lambda m: f'<span class="notranslate">{m.group(0)}</span>', escaped)
+
+
+def _restore(text: str) -> str:
+    """Reverse :func:`_protect` on a translated string: unwrap notranslate spans, turn
+    <br> back into newlines, and unescape HTML entities to recover plain text."""
+    text = _SPAN_RE.sub(lambda m: m.group(1), text)
+    text = re.sub(r'</?span[^>]*>', '', text)                # strip any stray span tags
+    text = _BR_RE.sub("\n", text)
+    return html.unescape(text)
+
 
 def _post_chunk(texts: list[str], to_lang: str, from_lang: str) -> list[str]:
-    """Translate one within-limits chunk. Raises on any transport/shape error."""
-    params = {"api-version": "3.0", "from": from_lang, "to": to_lang}
+    """Translate one within-limits chunk. Raises on any transport/shape error.
+
+    Sent as HTML (textType=html) so proper nouns wrapped by :func:`_protect` are kept
+    verbatim; the markup is stripped back out by :func:`_restore` on the way home."""
+    params = {"api-version": "3.0", "from": from_lang, "to": to_lang, "textType": "html"}
     headers = {
         "Ocp-Apim-Subscription-Key": config.aoai_key(),
         "Ocp-Apim-Subscription-Region": _REGION,
         "Content-Type": "application/json",
     }
     resp = requests.post(_ENDPOINT, params=params, headers=headers,
-                         json=[{"text": t} for t in texts], timeout=_TIMEOUT)
+                         json=[{"text": _protect(t)} for t in texts], timeout=_TIMEOUT)
     resp.raise_for_status()
     body = resp.json()
-    return [item["translations"][0]["text"] for item in body]
+    return [_restore(item["translations"][0]["text"]) for item in body]
 
 
 def _chunks(texts: list[str]) -> list[list[str]]:

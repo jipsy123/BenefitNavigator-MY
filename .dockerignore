@@ -1,0 +1,14 @@
+# Keep the cloud-build upload small and the image clean. Only the four runtime
+# packages named in Dockerfile.mcp are COPYed in; everything else is excluded.
+.venv/
+.venv-py39-backup/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+.git/
+tests/
+web/
+*.md
+.env
+.env.*
+infra/teardown.sh

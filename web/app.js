@@ -39,28 +39,55 @@ const grillCurrentEl   = document.getElementById('grill-current');
 const intakeCard       = document.querySelector('.intake-card');
 
 let currentLang        = langSelect ? langSelect.value : 'en';
-let lastAssessmentText = '';
+let lastAssessmentText = '';            // running conversation text, reused for appeals
 let canonicalMsResult  = null;          // Malay canonical from the last assessment
 let resultCacheByLang  = {};            // lang -> localized result dict
+let lastStages         = null;          // pipeline trace from the last assess turn
+let lastGroundedness   = null;          // groundedness from the last assess turn's gate
 
-// Grill (adaptive interview) state. The client holds the whole session; the server
-// is stateless. Questions/answers are stored language-neutrally (by field) so a
-// language toggle re-renders them instantly with no network call.
+// Conversation state. The signed token (opaque to the client) carries the real
+// facts/asked/turn SERVER-SIDE; the client only keeps what it must render, so the
+// browser never holds — or can tamper with — the eligibility inputs.
+let chatToken         = null;           // signed state token from the previous turn
 let grillActive       = false;
-let grillFacts        = {};             // established facts so far (Applicant subset)
-let grillPresumed     = {};             // LLM-presumed soft facts {field: {value, reason_ms}}
-let grillAsked        = [];             // fields already asked (incl. skipped)
-let grillQuery        = '';             // Malay retrieval query from /grill/start
-let grillCurrent      = null;           // the active question object, or null
-let grillTranscript   = [];             // [{field, kind, value, skipped}]
+let grillCurrent      = null;           // active question {field, answer_kind, …, _reply, _lang}
+let grillTranscript   = [];             // [{field, kind, value, skipped}] (local, display only)
 let grillLastProgress = null;           // last progress dict (for re-render on toggle)
-let grillBusy         = false;          // one in-flight grill call at a time — an answer
-                                        // and a chip-dismissal must never race
+let grillBusy         = false;          // one in-flight /chat call at a time
 
-// Store the active question stamped with the language its phrased text was
-// generated in — on a language toggle the static template takes over instead.
-function setGrillCurrent(question) {
-  grillCurrent = question ? { ...question, _lang: currentLang } : null;
+// The Malay sentence a structured answer becomes ON THE WIRE. The UI shows the choice
+// in the display language; the message sent to /chat is always Malay, so the intake
+// agent (which reasons in Malay — canonical_ms is the source of truth) parses it
+// reliably and we maintain just one set of templates. Free-text "Other" answers are
+// sent verbatim, and double as the way to correct a wrong assumption (a typed hard
+// fact overrides any server-side presumption).
+const MARITAL_MS = { single: 'bujang', married: 'berkahwin', widowed: 'balu/duda', divorced: 'bercerai' };
+const ANSWER_MS = {
+  citizen:        v => v ? 'Ya, saya warganegara Malaysia.' : 'Tidak, saya bukan warganegara Malaysia.',
+  is_oku:         v => v ? 'Ya, saya seorang OKU (orang kurang upaya).' : 'Tidak, saya bukan OKU.',
+  has_kad_oku:    v => v ? 'Ya, saya memegang Kad OKU JKM yang berdaftar.' : 'Tidak, saya tidak memegang Kad OKU.',
+  unable_to_work: v => v ? 'Ya, saya langsung tidak berupaya bekerja.' : 'Tidak, saya masih boleh bekerja.',
+  is_working:     v => v ? 'Ya, saya sedang bekerja.' : 'Tidak, saya tidak bekerja sekarang.',
+  is_carer:       v => v ? 'Ya, saya penjaga sepenuh masa kepada pesakit atau OKU terlantar.' : 'Tidak, saya bukan penjaga sepenuh masa.',
+  has_dependents: v => v ? 'Ya, saya mempunyai anak atau tanggungan.' : 'Tidak, saya tiada tanggungan.',
+  str_approved:   v => v ? 'Ya, permohonan STR saya telah diluluskan.' : 'Tidak, permohonan STR saya belum diluluskan.',
+  ekasih_listed:  v => v ? 'Ya, saya tersenarai dalam pangkalan data eKasih.' : 'Tidak, saya tidak tersenarai dalam eKasih.',
+  marital_status: v => 'Status perkahwinan saya ialah ' + (MARITAL_MS[v] || v) + '.',
+  age:               v => 'Umur saya ' + v + ' tahun.',
+  individual_income: v => 'Pendapatan bulanan saya sendiri ialah RM' + v + '.',
+  household_income:  v => 'Jumlah pendapatan bulanan isi rumah saya ialah RM' + v + '.',
+};
+const SKIP_MS = 'Saya tidak pasti tentang soalan itu dan ingin melangkaunya.';
+
+function answerToMessage(field, value) {
+  const fn = ANSWER_MS[field];
+  return fn ? fn(value) : String(value);
+}
+
+// Store the active question stamped with the phrased reply + its language — on a
+// language toggle the static template takes over (the reply isn't re-translated).
+function setGrillCurrent(question, reply) {
+  grillCurrent = question ? { ...question, _reply: reply || '', _lang: currentLang } : null;
 }
 
 // Build element safely (no innerHTML). props: class/text/aria/{attr} keys.
@@ -179,12 +206,12 @@ langSelect.addEventListener('change', () => {
 // Malay canonical — never re-running the pipeline, never translating a translation).
 async function renderLocalized(lang) {
   if (resultCacheByLang[lang]) {
-    renderResults(resultCacheByLang[lang], true);
+    renderResults(enrichResult(resultCacheByLang[lang]), true);
     return;
   }
   if (lang === 'ms') {
     resultCacheByLang.ms = canonicalMsResult;
-    renderResults(canonicalMsResult, true);
+    renderResults(enrichResult(canonicalMsResult), true);
     return;
   }
   announce(t('submitting'));
@@ -197,11 +224,23 @@ async function renderLocalized(lang) {
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     const data = await resp.json();
     resultCacheByLang[lang] = data.result;
-    renderResults(data.result, data.translation_ok);
+    renderResults(enrichResult(data.result), data.translation_ok);
   } catch (_err) {
     // Fall back to the verified Malay canonical, visibly.
-    renderResults(canonicalMsResult, false);
+    renderResults(enrichResult(canonicalMsResult), false);
   }
+}
+
+// /chat returns the verdict payload (re-localizable) plus a per-turn trace; the
+// pipeline panel + groundedness badge live in module state so they survive language
+// toggles (which only re-localize the verdict text). Re-attach them on every render.
+function enrichResult(result) {
+  if (!result) return result;
+  return {
+    ...result,
+    stages: lastStages || result.stages || [],
+    groundedness: lastGroundedness || result.groundedness,
+  };
 }
 
 btnTextSize.addEventListener('click', () => {
@@ -352,10 +391,11 @@ function renderMessage(messageText) {
   clearEl(messageContainer);
   if (!messageText) return;
   const card = el('div', { class: 'message-card' });
-  // Break the explanation at its numbered markers ("(1) … (2) … (3) …") so each
-  // section is scannable, and lift the leading "(n) …:" label into a heading.
-  // Falls back to a single block when the text has no such structure.
-  const blocks = messageText.split(/\n(?=\s*\(\d+\))/).map(b => b.trim()).filter(Boolean);
+  // Break the explanation into blocks at numbered markers ("(1) … (2) … (3) …") AND at
+  // blank lines, so each section/paragraph is scannable; lift a leading "(n) …:" label
+  // into a heading. Single newlines inside a block are preserved by .message-body's
+  // white-space: pre-line. Falls back to one block when the text has no such structure.
+  const blocks = messageText.split(/\n(?=\s*\(\d+\))|\n{2,}/).map(b => b.trim()).filter(Boolean);
   blocks.forEach(block => {
     const m = block.match(/^(\(\d+\)[^\n:]*:)\s*([\s\S]*)$/);
     if (m) {
@@ -709,8 +749,8 @@ function clearResultsUI() {
    nextstepsContainer, citationsContainer].forEach(clearEl);
 }
 
-// Open the interview from the free-text paragraph, then let the engine drive.
-btnAssess.addEventListener('click', async () => {
+// Open the conversation from the free-text paragraph; every turn after is an answer.
+btnAssess.addEventListener('click', () => {
   const text = situationInput.value.trim();
   if (!text) {
     showInlineError(t('err_empty'));
@@ -718,107 +758,29 @@ btnAssess.addEventListener('click', async () => {
     return;
   }
   clearInlineError();
-  setLoading(true);
   clearResultsUI();
   setIntakePhase('describe');          // reset the journey rail for a fresh run
-  lastAssessmentText = text;           // the opening paragraph, reused for appeals
+  lastAssessmentText = text;           // opening paragraph; grows with each answer (for appeals)
+  chatToken = null;                    // a fresh conversation
   grillActive = true;
-  grillFacts = {}; grillPresumed = {}; grillAsked = []; grillQuery = '';
   grillCurrent = null; grillTranscript = []; grillLastProgress = null;
   [grillProgressEl, grillPresumedEl, grillTranscriptEl, grillCurrentEl].forEach(clearEl);
-
-  try {
-    const resp = await fetch('/grill/start', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, lang: currentLang })
-    });
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({ detail: t('err_server') }));
-      throw new Error(err.detail || 'HTTP ' + resp.status);
-    }
-    const data = await resp.json();
-    if (data.blocked) {
-      grillActive = false;
-      grillPanel.classList.add('hidden');
-      showInlineError(t('grill_blocked'));
-      return;
-    }
-    grillFacts = data.facts || {};
-    grillPresumed = data.presumed || {};
-    grillAsked = data.asked || [];
-    grillQuery = data.retrieval_query_ms || '';
-    grillLastProgress = data.progress || null;
-    grillPanel.classList.remove('hidden');
-    setIntakePhase('questions');         // advance the rail to the interview phase
-    if (data.done) { await finishGrill(); return; }
-    setGrillCurrent(data.question);
-    renderGrill(data.progress);
-  } catch (err) {
-    grillActive = false;
-    showInlineError(t('err_connection') + ' (' + (err.message || '') + ')');
-    announce(t('err_connection_announce'));
-  } finally {
-    setLoading(false);
-  }
+  chatSend(text, { fresh: true });
 });
 
-// Send one structured answer (or skip) and advance to the next gap.
-async function grillNext(payload) {
+// One conversation turn: POST the message (+ the carried signed token) and route the
+// reply. The token is the ONLY thing that crosses turns — the client holds no facts.
+async function chatSend(message, opts) {
   if (grillBusy) return;
   grillBusy = true;
-  const answered = grillCurrent;                 // the question being answered now
-  try {
-    const resp = await fetch('/grill/next', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        facts: grillFacts, presumed: grillPresumed, asked: grillAsked,
-        field: payload.field,
-        value: payload.skip ? null : payload.value, skip: !!payload.skip,
-        text: lastAssessmentText, lang: currentLang
-      })
-    });
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({ detail: t('err_server') }));
-      throw new Error(err.detail || 'HTTP ' + resp.status);
-    }
-    const data = await resp.json();
-    grillTranscript = grillTranscript.concat([{
-      field: payload.field, kind: answered ? answered.answer_kind : 'boolean',
-      value: payload.skip ? null : payload.value, skipped: !!payload.skip
-    }]);
-    grillFacts = data.facts;
-    grillPresumed = data.presumed || {};
-    grillAsked = data.asked;
-    grillLastProgress = data.progress;
-    if (data.done) {
-      setGrillCurrent(null);
-      renderGrill(data.progress);
-      await finishGrill();
-      return;
-    }
-    setGrillCurrent(data.question);
-    renderGrill(data.progress);
-  } catch (err) {
-    showInlineError(t('err_connection') + ' (' + (err.message || '') + ')');
-  } finally {
-    grillBusy = false;
-  }
-}
-
-// Run the gathered profile through the same verified pipeline as before.
-async function finishGrill() {
-  clearEl(grillCurrentEl);
-  grillCurrentEl.appendChild(el('div', { class: 'grill-done', text: t('grill_done') }));
-  announce(t('grill_done'));
   setLoading(true);
   try {
-    const resp = await fetch('/grill/assess', {
+    const resp = await fetch('/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        facts: grillFacts, presumed: grillPresumed, retrieval_query_ms: grillQuery,
+        message: message,
+        token: (opts && opts.fresh) ? null : chatToken,
         lang: currentLang
       })
     });
@@ -826,108 +788,132 @@ async function finishGrill() {
       const err = await resp.json().catch(() => ({ detail: t('err_server') }));
       throw new Error(err.detail || 'HTTP ' + resp.status);
     }
-    const data = await resp.json();   // { lang, translation_ok, result, canonical_ms }
-    canonicalMsResult = data.canonical_ms;
-    resultCacheByLang = { ms: data.canonical_ms };
-    resultCacheByLang[data.lang] = data.result;
-    grillActive = false;
-    renderResults(data.result, data.translation_ok);
+    handleTurn(await resp.json());
   } catch (err) {
     showInlineError(t('err_connection') + ' (' + (err.message || '') + ')');
     announce(t('err_connection_announce'));
   } finally {
+    grillBusy = false;
     setLoading(false);
   }
+}
+
+// Route one /chat turn: ask → next question; assess → verified results; escalate /
+// refuse → a calm hand-off to a human. The verdict gate already ran server-side.
+function handleTurn(turn) {
+  chatToken = turn.token || chatToken;
+
+  if (turn.action === 'ask' && turn.question) {
+    grillActive = true;
+    grillPanel.classList.remove('hidden');
+    setIntakePhase('questions');
+    grillLastProgress = turn.progress || null;
+    setGrillCurrent(turn.question, turn.reply);
+    renderGrill(grillLastProgress);
+    return;
+  }
+
+  if (turn.action === 'assess' && turn.result) {
+    grillActive = false;
+    setGrillCurrent(null);
+    renderGrillProgress(grillLastProgress, true);   // interview complete → full bar, no "still open"
+    renderGrillTranscript();
+    clearEl(grillCurrentEl);
+    grillCurrentEl.appendChild(el('div', { class: 'grill-done', text: t('grill_done') }));
+    canonicalMsResult = turn.canonical_ms || null;
+    lastStages = traceToStages(turn.trace);
+    lastGroundedness = gateGroundedness(turn.trace);
+    resultCacheByLang = {};
+    if (canonicalMsResult) resultCacheByLang.ms = canonicalMsResult;
+    resultCacheByLang[turn.lang] = turn.result;
+    renderResults(enrichResult(turn.result), turn.translation_ok);
+    return;
+  }
+
+  // escalate | refuse | any turn without a usable verdict payload → route to a human.
+  grillActive = false;
+  canonicalMsResult = null;            // a hand-off message is not a re-localizable verdict
+  lastStages = traceToStages(turn.trace);
+  lastGroundedness = null;
+  renderResults({ refused: true, message_ms: turn.reply || t('refusal_fallback'),
+                  stages: lastStages }, turn.translation_ok);
+}
+
+// Send the current question's answer — a structured chip, a skip, or free-text "Other".
+function answerCurrent(payload) {
+  if (!grillCurrent || grillBusy) return;
+  const field = grillCurrent.field;
+  let message, row;
+  if (payload.other != null) {
+    message = payload.other;                                   // free text, sent verbatim
+    row = { field, kind: 'text', value: payload.other, skipped: false };
+  } else if (payload.skip) {
+    message = SKIP_MS;
+    row = { field, kind: grillCurrent.answer_kind, value: null, skipped: true };
+  } else {
+    message = answerToMessage(field, payload.value);           // structured → Malay sentence
+    row = { field, kind: grillCurrent.answer_kind, value: payload.value, skipped: false };
+  }
+  grillTranscript = grillTranscript.concat([row]);
+  lastAssessmentText += ' ' + message;                         // grow conversation text (appeals)
+  chatSend(message, {});
+}
+
+// Map the /chat trace ([{stage,status,…}]) into the "How we checked" panel's shape.
+// status: ok/unavailable/fallback all read as success (not failures); the rest are ✗.
+const _TRACE_OK = ['ok', 'unavailable', 'fallback'];
+function traceToStages(trace) {
+  if (!Array.isArray(trace)) return [];
+  return trace.map(s => ({
+    name: t('trace_' + String(s.stage || '').toLowerCase()),
+    status: _TRACE_OK.includes(s.status) ? 'ok' : (s.status || 'ok'),
+    summary: ''
+  }));
+}
+
+// The groundedness verdict lives on the GATE trace entry (or null if unavailable).
+function gateGroundedness(trace) {
+  if (!Array.isArray(trace)) return null;
+  const gate = trace.find(s => s.stage === 'GATE');
+  if (!gate || typeof gate.available === 'undefined') return null;
+  return { available: gate.available, grounded: gate.grounded,
+           ungrounded_percentage: gate.ungrounded_percentage };
 }
 
 // ----- Grill rendering (all from i18n + stored state — language-toggle safe) -----
 
 function renderGrill(progress) {
   renderGrillProgress(progress);
-  renderGrillPresumed();
   renderGrillTranscript();
   renderGrillCurrent();
 }
 
-// ----- Presumption chips: LLM-proposed soft facts the user can veto --------------
-
-function presumedValueLabel(field, value) {
-  if (typeof value === 'boolean') return value ? t('grill_yes') : t('grill_no');
-  if (field === 'marital_status') return t('marital_' + value);
-  return String(value);
-}
-
-function renderGrillPresumed() {
-  clearEl(grillPresumedEl);
-  const fields = Object.keys(grillPresumed);
-  if (!fields.length) return;
-  grillPresumedEl.appendChild(el('div', { class: 'grill-presumed-title',
-    text: t('grill_assumed_title') }));
-  const wrap = el('div', { class: 'grill-presumed-chips' });
-  fields.forEach(field => {
-    const chip = el('span', { class: 'grill-presumed-chip', role: 'listitem' });
-    chip.appendChild(el('span', {
-      text: t('q_' + field) + ' — ' + presumedValueLabel(field, grillPresumed[field].value) }));
-    const x = el('button', { type: 'button', class: 'grill-presumed-x',
-      'aria-label': t('grill_assumed_remove'), text: '✕' });
-    x.addEventListener('click', () => dismissPresumed(field));
-    chip.appendChild(x);
-    wrap.appendChild(chip);
-  });
-  grillPresumedEl.appendChild(wrap);
-}
-
-// Veto one presumption: the field becomes UNKNOWN again, so the engine puts it
-// back in the question queue (a recompute call — no answer is applied). Local
-// state is only committed from the server's response — on failure the chip stays.
-async function dismissPresumed(field) {
-  if (grillBusy) return;
-  grillBusy = true;
-  const nextPresumed = { ...grillPresumed };
-  delete nextPresumed[field];
-  try {
-    const resp = await fetch('/grill/next', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ facts: grillFacts, presumed: nextPresumed, asked: grillAsked,
-        text: lastAssessmentText, lang: currentLang })
-    });
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({ detail: t('err_server') }));
-      throw new Error(err.detail || 'HTTP ' + resp.status);
-    }
-    const data = await resp.json();
-    grillFacts = data.facts;
-    grillPresumed = data.presumed || {};
-    grillAsked = data.asked;
-    grillLastProgress = data.progress;
-    setGrillCurrent(data.done ? null : data.question);
-    renderGrill(data.progress);
-    if (data.done) { await finishGrill(); }
-  } catch (err) {
-    showInlineError(t('err_connection') + ' (' + (err.message || '') + ')');
-  } finally {
-    grillBusy = false;
-  }
-}
-
-function renderGrillProgress(progress) {
+// `done` = the interview is complete (the engine has enough to decide). When done we show
+// a full bar and a completion line — NOT "{undecided} still open", because a programme can
+// stay mathematically undecided while no remaining question could change it. Saying "still
+// open" there reads as an unanswered question and contradicts "checking your eligibility".
+function renderGrillProgress(progress, done) {
   clearEl(grillProgressEl);
   if (!progress) return;
-  const pct = progress.total ? Math.round((100 * progress.decided) / progress.total) : 0;
-  const bar = el('div', { class: 'grill-progress-bar', aria: { hidden: 'true' } });
+  const pct = done ? 100
+    : (progress.total ? Math.round((100 * progress.decided) / progress.total) : 0);
+  const bar = el('div', { class: 'grill-progress-bar' + (done ? ' is-done' : ''),
+    aria: { hidden: 'true' } });
   const fill = el('div', { class: 'grill-progress-fill' });
   fill.style.width = pct + '%';
   bar.appendChild(fill);
   grillProgressEl.appendChild(bar);
   grillProgressEl.appendChild(el('div', { class: 'grill-progress-text',
-    text: t('grill_progress', {
-      total: progress.total, decided: progress.decided, undecided: progress.undecided
-    }) }));
+    text: done
+      ? t('grill_progress_done', { total: progress.total })
+      : t('grill_progress', {
+          total: progress.total, decided: progress.decided, undecided: progress.undecided
+        }) }));
 }
 
 function transcriptValueLabel(item) {
   if (item.skipped) return t('grill_skip');
+  if (item.kind === 'text') return item.value;          // free-text "Other" answer
   if (item.kind === 'boolean') return item.value ? t('grill_yes') : t('grill_no');
   if (item.kind === 'choice') return t('marital_' + item.value);
   if (item.kind === 'money') return 'RM' + item.value;
@@ -954,20 +940,27 @@ function answerBtn(label, onClick, extraClass) {
 
 function buildAnswerControls(q) {
   const wrap = el('div', { class: 'grill-answers' });
+  const primary = el('div', { class: 'grill-primary-answers' });
+  const isChip = q.answer_kind === 'boolean' || q.answer_kind === 'choice';
+
   if (q.answer_kind === 'boolean') {
-    wrap.appendChild(answerBtn(t('grill_yes'), () => grillNext({ field: q.field, value: true })));
-    wrap.appendChild(answerBtn(t('grill_no'), () => grillNext({ field: q.field, value: false })));
+    primary.appendChild(answerBtn(t('grill_yes'), () => answerCurrent({ value: true })));
+    primary.appendChild(answerBtn(t('grill_no'), () => answerCurrent({ value: false })));
   } else if (q.answer_kind === 'choice') {
     (q.choices || []).forEach(c =>
-      wrap.appendChild(answerBtn(t('marital_' + c), () => grillNext({ field: q.field, value: c }))));
+      primary.appendChild(answerBtn(t('marital_' + c), () => answerCurrent({ value: c }))));
   } else {
+    // money / integer — the field itself IS the free-form answer (no separate "Other").
     const isMoney = q.answer_kind === 'money';
+    const field = el('div', { class: 'grill-num-field' + (isMoney ? ' is-money' : '') });
+    if (isMoney) field.appendChild(el('span', { class: 'grill-num-prefix', 'aria-hidden': 'true', text: 'RM' }));
     const input = el('input', {
-      type: 'number', min: '0', step: isMoney ? '1' : '1', class: 'grill-input',
+      type: 'number', min: '0', step: '1', class: 'grill-num-input',
       inputmode: 'numeric', 'aria-label': t('grill_answer_aria'),
       placeholder: isMoney ? t('grill_amount_placeholder') : ''
     });
-    const submit = answerBtn(t('grill_submit'), () => {
+    const submit = el('button', { type: 'button', class: 'grill-num-send', text: t('grill_submit') });
+    const go = () => {
       const raw = input.value.trim();
       const num = Number(raw);
       if (raw === '' || Number.isNaN(num) || num < 0) {
@@ -976,45 +969,71 @@ function buildAnswerControls(q) {
         return;
       }
       clearInlineError();
-      grillNext({ field: q.field, value: num });
-    });
-    input.addEventListener('keydown', e => { if (e.key === 'Enter') submit.click(); });
-    if (isMoney) {
-      const prefix = el('span', { class: 'grill-input-prefix', 'aria-hidden': 'true', text: 'RM' });
-      wrap.appendChild(prefix);
-    }
-    wrap.appendChild(input);
-    wrap.appendChild(submit);
+      answerCurrent({ value: num });
+    };
+    submit.addEventListener('click', go);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+    field.appendChild(input);
+    field.appendChild(submit);
+    primary.appendChild(field);
   }
+
   if (q.skippable) {
-    wrap.appendChild(answerBtn(t('grill_skip'), () => grillNext({ field: q.field, skip: true }),
+    primary.appendChild(answerBtn(t('grill_skip'), () => answerCurrent({ skip: true }),
       'grill-skip-btn'));
   }
+  wrap.appendChild(primary);
+
+  // "Other" — answer in your own words when the preset chips don't fit. Also the
+  // correction path: a typed hard fact ("actually I'm married") overrides a server-side
+  // presumption (facts beat presumptions in the trust core). Only shown for chip
+  // questions; a number field already accepts free input, so a second textbox there
+  // would be redundant clutter.
+  if (isChip) wrap.appendChild(buildOtherControl());
   return wrap;
+}
+
+function buildOtherControl() {
+  const other = el('div', { class: 'grill-other' });
+  // A quiet "or" divider sets the free-text escape hatch apart from the primary chips,
+  // keeping the chips the clear primary action.
+  const divider = el('div', { class: 'grill-or', aria: { hidden: 'true' } });
+  divider.appendChild(el('span', { class: 'grill-or-text', text: t('chat_or') }));
+  other.appendChild(divider);
+  other.appendChild(el('label', { class: 'grill-other-label', for: 'grill-other-input',
+    text: t('chat_other_label') }));
+  const row = el('div', { class: 'grill-other-row' });
+  const input = el('input', { type: 'text', id: 'grill-other-input', class: 'grill-other-input',
+    maxlength: '400', 'aria-label': t('chat_other_label'), placeholder: t('chat_other_ph') });
+  const send = el('button', { type: 'button', class: 'grill-other-send', text: t('chat_send') });
+  const go = () => {
+    const text = input.value.trim();
+    if (!text) { input.focus(); return; }
+    clearInlineError();
+    answerCurrent({ other: text });
+  };
+  send.addEventListener('click', go);
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+  row.appendChild(input);
+  row.appendChild(send);
+  other.appendChild(row);
+  return other;
 }
 
 function renderGrillCurrent() {
   clearEl(grillCurrentEl);
   if (!grillCurrent) return;
   const q = grillCurrent;
-  // Contextual phrasing only while the UI language matches the language it was
-  // generated in; otherwise (toggle, phrasing failure) the static template renders.
-  const qText = (q.question_text && q._lang === currentLang)
-    ? q.question_text : t('q_' + q.field);
+  // The Interview agent's warm phrasing (turn.reply) only while the UI language matches
+  // the language it was generated in; otherwise (toggle) the static template renders.
+  const qText = (q._reply && q._lang === currentLang)
+    ? q._reply : t('q_' + q.field);
   const card = el('div', { class: 'grill-q-card' });
   card.appendChild(el('div', { class: 'grill-q-text', text: qText }));
-
-  if (q.programs && q.programs.length) {
-    const chip = el('div', { class: 'grill-why' });
-    chip.appendChild(el('span', { class: 'grill-why-icon', 'aria-hidden': 'true', text: '💡 ' }));
-    const names = q.programs.slice(0, 2).map(p => {
-      const amt = formatAmount(p.amount);
-      return p.name_ms + (amt ? ' (' + amt + ')' : '');
-    }).join('; ');
-    chip.appendChild(el('span', { text: t('grill_why_prefix') + names }));
-    card.appendChild(chip);
-  }
-
+  // No separate "why" chip: the Interview agent's phrased question (turn.reply, shown
+  // above and localized to the display language) already names the benefit it unlocks.
+  // The old chip drew from programs[].name_ms — Malay-only — so it leaked Malay in
+  // English/中文/தமிழ் mode; the localized reply replaces it.
   card.appendChild(buildAnswerControls(q));
   grillCurrentEl.appendChild(card);
   announce(qText);

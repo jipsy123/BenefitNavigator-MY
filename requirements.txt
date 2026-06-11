@@ -5,6 +5,14 @@ requests>=2.31.0
 fastapi>=0.110.0
 uvicorn[standard]>=0.29.0
 
+# --- multi-agent A2A layer (mas/) — added 2026-06-11; needs Python 3.10+ ---
+# Auth stays az-CLI based: azure-identity's AzureCliCredential reuses `az login`,
+# so we keep "no committed secrets". The hosted-agent provisioning SDK
+# (azure-ai-projects / azure-ai-agents, the 2.0 beta carrying A2A + MCP tool
+# support) is installed at provisioning time with --pre; see mas/provision.py.
+azure-identity>=1.19.0
+mcp>=1.2.0
+
 # dev / test
 pytest>=8.0.0
 httpx>=0.27.0

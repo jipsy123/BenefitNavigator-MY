@@ -1,0 +1,8 @@
+# Minimal runtime deps for the trust-core MCP server container (mas/mcp_server.py).
+# Deliberately smaller than the repo's requirements.txt: the trust core is pure
+# Python (compute/), the reading-grade scorer is pure regex (agent/readability.py),
+# and grounding retrieval (ingest/) uses plain REST. No openai, no azure-* SDKs, no
+# fastapi are needed here — the hosted agents live in Foundry, not in this image.
+mcp>=1.2.0
+uvicorn[standard]>=0.29.0
+requests>=2.31.0
