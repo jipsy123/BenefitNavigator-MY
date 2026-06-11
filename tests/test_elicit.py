@@ -159,7 +159,7 @@ def test_str_bujang_age_unknown_when_age_missing():
 # --- program status (all / any logic) --------------------------------------------
 
 def test_program_eligible_when_all_criteria_true():
-    known = {"citizen": True, "age": 30, "has_kad_oku": True,
+    known = {"citizen": True, "age": 30, "is_oku": True, "has_kad_oku": True,
              "unable_to_work": True, "individual_income": 500}
     assert elicit.program_status(known, PROGRAMS["jkm_btb"], REFS) is True
 

@@ -25,6 +25,7 @@
       "criteria": [
         { "type": "citizen", "category": "fact", "label_ms": "Warganegara dan bermastautin di Malaysia" },
         { "type": "age_gte", "value": 16, "category": "fact", "label_ms": "Berumur 16 tahun dan ke atas" },
+        { "type": "flag_true", "flag": "is_oku", "category": "fact", "label_ms": "Orang Kurang Upaya (OKU)" },
         { "type": "flag_true", "flag": "has_kad_oku", "category": "registration", "label_ms": "Pemegang Kad OKU JKM", "gap_action_ms": "Daftar sebagai OKU dan dapatkan Kad OKU di pejabat JKM daerah." },
         { "type": "flag_true", "flag": "is_working", "category": "fact", "label_ms": "Sedang bekerja di Malaysia" },
         { "type": "individual_income_lte", "threshold": 1200, "category": "income", "label_ms": "Pendapatan bulanan individu RM1,200 dan ke bawah" }
@@ -40,6 +41,7 @@
       "criteria": [
         { "type": "citizen", "category": "fact", "label_ms": "Warganegara dan bermastautin di Malaysia" },
         { "type": "age_gte", "value": 16, "category": "fact", "label_ms": "Berumur 16 tahun dan ke atas" },
+        { "type": "flag_true", "flag": "is_oku", "category": "fact", "label_ms": "Orang Kurang Upaya (OKU)" },
         { "type": "flag_true", "flag": "has_kad_oku", "category": "registration", "label_ms": "Pemegang Kad OKU JKM", "gap_action_ms": "Daftar sebagai OKU dan dapatkan Kad OKU di pejabat JKM daerah." },
         { "type": "flag_true", "flag": "unable_to_work", "category": "fact", "label_ms": "Tidak berupaya bekerja" },
         { "type": "individual_income_lte", "ref": "pgk_per_capita_monthly", "category": "income", "label_ms": "Sumber kewangan bulanan individu OKU tidak melebihi PGK per kapita semasa" }
