@@ -113,6 +113,25 @@ def _project_client():
                            credential=AzureCliCredential())
 
 
+def _final_output_text(resp) -> str:
+    """Return the LAST message the agent emitted, not `output_text`.
+
+    A tool-using run (e.g. the Communicator's draft → grade → rewrite loop) emits each
+    draft as its own message item, and `output_text` concatenates ALL of them — the
+    citizen would see the narrative repeated once per rewrite. Only the final message
+    is the agent's answer; `output_text` remains the fallback for shapes without
+    message items."""
+    messages = [item for item in (getattr(resp, "output", None) or [])
+                if getattr(item, "type", "") == "message"]
+    if messages:
+        parts = (getattr(c, "text", "") or ""
+                 for c in (getattr(messages[-1], "content", None) or []))
+        text = "".join(parts).strip()
+        if text:
+            return text
+    return (getattr(resp, "output_text", "") or "").strip()
+
+
 def _invoke_agent(agent_id: str, prompt: str) -> str:
     """Invoke one hosted Foundry agent by name via the Responses API and return its
     final text. This is the validated direct-invocation path (probe_agent.py): the
@@ -122,7 +141,7 @@ def _invoke_agent(agent_id: str, prompt: str) -> str:
         input=prompt,
         extra_body={"agent_reference": {"type": "agent_reference", "name": agent_id}},
     )
-    return (getattr(resp, "output_text", "") or "").strip()
+    return _final_output_text(resp)
 
 
 def _safe_invoke_agent(agent_id: str, prompt: str) -> str:

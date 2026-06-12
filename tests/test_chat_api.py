@@ -215,3 +215,35 @@ def test_chat_invalid_token_returns_400():
 def test_chat_rejects_unsupported_language():
     resp = client.post("/chat", json={"message": "hi", "lang": "fr"})
     assert resp.status_code == 400
+
+
+# --- _final_output_text: only the agent's FINAL message is the answer -------------
+
+def _resp(output=None, output_text=""):
+    return SimpleNamespace(output=output, output_text=output_text)
+
+
+def _message(text):
+    return SimpleNamespace(type="message", content=[SimpleNamespace(text=text)])
+
+
+def test_final_output_text_takes_last_message_only():
+    # A grade-loop run emits draft + rewrites as separate message items; output_text
+    # concatenates ALL of them (the citizen would see the narrative repeated).
+    resp = _resp(output=[_message("Draf pertama."),
+                         SimpleNamespace(type="mcp_call"),
+                         _message("Draf akhir yang lebih mudah.")],
+                 output_text="Draf pertama.Draf akhir yang lebih mudah.")
+    assert orchestrate._final_output_text(resp) == "Draf akhir yang lebih mudah."
+
+
+def test_final_output_text_falls_back_to_output_text():
+    resp = _resp(output=None, output_text="  Jawapan tunggal.  ")
+    assert orchestrate._final_output_text(resp) == "Jawapan tunggal."
+
+
+def test_final_output_text_joins_parts_of_final_message():
+    resp = _resp(output=[_message("")],
+                 output_text="fallback")
+    # An empty final message degrades to output_text rather than returning "".
+    assert orchestrate._final_output_text(resp) == "fallback"
