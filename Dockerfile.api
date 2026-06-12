@@ -1,0 +1,37 @@
+# Conductor image — the FastAPI surface (api.app:app): the /chat orchestration loop,
+# the NON-BYPASSABLE dual safety gate, and the static web UI. Deployed to Azure
+# Container Apps as `benefitnav-api`, alongside the trust-core `benefitnav-mcp` app.
+#
+# Secrets are injected at runtime as Container Apps secrets (never baked in):
+#   BENEFITNAV_AOAI_KEY, BENEFITNAV_SEARCH_KEY, BENEFITNAV_TOKEN_SECRET.
+# Foundry Agent Service auth uses the Container App's managed identity via
+# DefaultAzureCredential (config.azure_credential) — no key, no `az` in the image.
+# MCR Azure Linux base (not docker.io/python) avoids Docker Hub pull-rate throttling
+# on ACR's shared build runners.
+FROM mcr.microsoft.com/azurelinux/base/python:3.12
+
+WORKDIR /app
+
+# Deps first for layer caching.
+COPY infra/conductor.requirements.txt ./requirements.txt
+RUN python3 -m ensurepip --upgrade 2>/dev/null || true \
+    && python3 -m pip install --no-cache-dir -r requirements.txt
+
+# Only what the conductor imports: the trust core, the LLM touchpoints, the ingest
+# config/retrieval, the multi-agent layer, the API surface, and the static UI.
+# corpus-fetcher/, tests/ and the MCP server's standalone deps are intentionally absent.
+COPY compute/ ./compute/
+COPY agent/ ./agent/
+COPY ingest/ ./ingest/
+COPY mas/ ./mas/
+COPY api/ ./api/
+COPY web/ ./web/
+
+ENV PYTHONPATH=/app \
+    PYTHONUNBUFFERED=1 \
+    PORT=8000
+
+EXPOSE 8000
+
+# Honour $PORT so the platform can override it; bind 0.0.0.0 for the container.
+CMD ["sh", "-c", "python3 -m uvicorn api.app:app --host 0.0.0.0 --port ${PORT}"]
