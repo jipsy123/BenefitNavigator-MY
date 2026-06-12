@@ -92,8 +92,25 @@ def _fallback_secret() -> bytes:
 
 
 def _secret() -> bytes:
+    """The HMAC key shared by the signer (FastAPI orchestrator) and the verifier (the
+    MCP container's grill/assess tools).
+
+    The env var is live-read first (set on the container; flipped by tests) so it is
+    never cached stale. When it is unset — the local orchestrator's default — the *same*
+    secret the container holds is fetched from its Container Apps secret via the config
+    layer, so both sides verify each other's tokens. Only if that fetch is unavailable
+    too do we fall back to a per-process random secret: the app still runs, but tokens
+    will not verify across processes (the loud warning in _fallback_secret fires)."""
     env = os.environ.get(_SECRET_ENV)
-    return env.encode("utf-8") if env else _fallback_secret()
+    if env:
+        return env.encode("utf-8")
+    try:
+        from ingest import config
+        return config.token_secret().encode("utf-8")
+    except Exception as exc:  # noqa: BLE001 — never let secret resolution crash a turn
+        logger.debug("token secret unresolved via config (%s); using random fallback",
+                     str(exc)[:120])
+        return _fallback_secret()
 
 
 # --- Encode / decode -------------------------------------------------------------

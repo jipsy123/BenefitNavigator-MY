@@ -45,6 +45,14 @@ SEARCH_API_INDEX = "2024-07-01"
 SEARCH_API_KS = "2026-04-01"
 SEARCH_API_KB = "2026-05-01-preview"
 
+# --- Trust-core MCP server (Azure Container Apps, mas/mcp_server.py) ---
+# The HMAC secret that signs/verifies the /chat state token lives here as a Container
+# Apps secret. The signer (the FastAPI orchestrator) and the verifier (this container's
+# grill/assess tools) must use the identical key, so the local orchestrator fetches the
+# same value the container holds — see token_secret() below.
+MCP_CONTAINER_APP = "benefitnav-mcp"
+MCP_TOKEN_SECRET_NAME = "token-secret"
+
 # --- Corpus location (extracted, machine-readable text) ---
 # The index build reads pre-extracted corpus text from the separate corpus-fetcher
 # tool. Override with the CORPUS_TEXT_DIR env var when that tool is not a sibling of
@@ -108,4 +116,26 @@ def search_key() -> str:
         "search", "admin-key", "show",
         "-g", RESOURCE_GROUP, "--service-name", SEARCH_SERVICE,
         "--query", "primaryKey", "-o", "tsv",
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def token_secret() -> str:
+    """HMAC secret for the /chat conversation state token (cached for the process).
+
+    The FastAPI orchestrator *signs* the token and the Foundry MCP container *verifies*
+    it, so both must use the identical secret or every grill/assess tool call fails the
+    signature check. Prefers the BENEFITNAV_TOKEN_SECRET env var — that is how the
+    container (which has no Azure CLI) receives it; locally the var is unset, so the
+    same value is fetched from the container's Container Apps secret via `az`. Either
+    way the secret is never committed to the repo.
+    """
+    env = os.environ.get("BENEFITNAV_TOKEN_SECRET")
+    if env:
+        return env
+    return _az(
+        "containerapp", "secret", "show",
+        "-g", RESOURCE_GROUP, "-n", MCP_CONTAINER_APP,
+        "--secret-name", MCP_TOKEN_SECRET_NAME,
+        "--query", "value", "-o", "tsv",
     )

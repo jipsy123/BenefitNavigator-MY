@@ -91,6 +91,16 @@ def test_secret_mismatch_rejected(monkeypatch):
         decode(token)
 
 
+def test_secret_delegates_to_config_when_env_unset(monkeypatch):
+    """With no BENEFITNAV_TOKEN_SECRET in the environment — the local orchestrator's
+    default — the key is sourced from config.token_secret (the same Container Apps
+    secret the MCP container verifies with), NOT the per-process random fallback."""
+    monkeypatch.delenv("BENEFITNAV_TOKEN_SECRET", raising=False)
+    from ingest import config
+    monkeypatch.setattr(config, "token_secret", lambda: "shared-with-container")
+    assert state._secret() == b"shared-with-container"
+
+
 def test_agent_cannot_smuggle_a_fact(monkeypatch):
     """Simulate an agent trying to flip is_oku inside the payload: re-encoding the
     altered facts requires the secret it does not have, so the forged token fails."""
