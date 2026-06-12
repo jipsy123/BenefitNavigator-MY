@@ -29,6 +29,7 @@ dist/
 # Logs
 *.log
 
-# Local scratch — UI previews and design notes kept out of the tree
+# Local scratch — UI previews, design notes, internal planning kept out of the tree
 web/_preview_*.html
 CONTROLLER-DESIGN.md
+docs/superpowers/
