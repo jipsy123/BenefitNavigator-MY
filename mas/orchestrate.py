@@ -69,6 +69,12 @@ _AGENT_ACTIONS = {ACTION_ASK, ACTION_ASSESS, ACTION_ESCALATE}
 _MAX_PASSAGES_FOR_NARRATION = 4
 _PASSAGE_SNIPPET_CHARS = 600
 
+# Mirrors SKIP_MS in web/app.js — the fixed sentence the Skip chip puts on the wire.
+# Keep the two in sync. It means "skip THIS question": flow control, not language, so
+# it is handled deterministically before ROUTE (the router used to read it as "give me
+# my result now" and produced premature mid-interview assessments).
+SKIP_SENTINEL_MS = "Saya tidak pasti tentang soalan itu dan ingin melangkaunya."
+
 # Shown as the assessment's lead paragraph when the Communicator agent is unavailable
 # (e.g. a transient 429). It is a fixed, claim-free framing line — it states NO amount and
 # NO verdict, so it cannot fabricate; the verified eligible/near-miss CARDS (straight from
@@ -218,8 +224,12 @@ def _communicator_prompt(message: str, verdict_block_ms: str,
         "jangan sekali-kali memperkenalkan angka baharu. Panggil grade(text) untuk "
         "menyemak kebolehbacaan; jika belum cukup mudah, tulis semula lebih ringkas dan "
         "semak lagi. Tulis perenggan biasa sahaja — JANGAN guna markdown (tiada **, ##, "
-        "---, atau senarai bernombor) dan JANGAN guna emoji. Output HANYA teks "
-        "penjelasan akhir — tiada JSON.")
+        "---, atau senarai bernombor) dan JANGAN guna emoji. JANGAN sebut talian "
+        "bantuan atau nombor telefon (contoh: Talian Kasih 15999) dan JANGAN alihkan "
+        "rakyat ke saluran lain sebagai ganti penjelasan — kad keputusan yang disahkan "
+        "sudah membawa panduan itu; jika input mengelirukan, terangkan sahaja apa yang "
+        "tertulis dalam VERDIK. (Panduan tempat memohon seperti pejabat JKM atau portal "
+        "MyHASiL dibenarkan.) Output HANYA teks penjelasan akhir — tiada JSON.")
 
 
 def _escalation_prompt(message: str, reason_ms: str) -> str:
@@ -392,14 +402,21 @@ def run_chat(message: str, token: Optional[str] = None, lang: str = "en") -> Cha
     situation = _situation_ms(known, need, state.assessment is not None)
     applicant = elicit.to_applicant(known)
 
-    # 3) ROUTE — the Orchestrator agent decides the action (deterministic fallback)
-    routing = _route(message, situation)
-    action = routing.get("action")
-    if action not in _AGENT_ACTIONS:
-        action = ACTION_ASSESS if interview_done else ACTION_ASK
-    rationale_ms = (routing.get("rationale_ms") or "").strip()
-    trace.append({"stage": "ROUTE", "status": "ok" if routing else "fallback",
-                  "action": action})
+    # 3) ROUTE — the Orchestrator agent decides the action (deterministic fallback).
+    #    The skip sentinel never reaches the router: skipping one question is flow
+    #    control, and the asked-fields spine already advances past it (next_field
+    #    excludes asked fields), so the only correct action is to ask the next one.
+    if message.strip() == SKIP_SENTINEL_MS and not interview_done:
+        action, rationale_ms = ACTION_ASK, ""
+        trace.append({"stage": "ROUTE", "status": "skip", "action": action})
+    else:
+        routing = _route(message, situation)
+        action = routing.get("action")
+        if action not in _AGENT_ACTIONS:
+            action = ACTION_ASSESS if interview_done else ACTION_ASK
+        rationale_ms = (routing.get("rationale_ms") or "").strip()
+        trace.append({"stage": "ROUTE", "status": "ok" if routing else "fallback",
+                      "action": action})
 
     # 4) NARRATE — invoke the matching specialist directly, then gate ----------
     if action == ACTION_ESCALATE:

@@ -133,6 +133,11 @@ COMMUNICATOR = AgentSpec(
         "- After drafting, call grade(text) ONCE. If readable=false, rewrite more simply "
         "ONE more time; do not loop further (the system verifies and simplifies again "
         "downstream). Aim for easy language, target grade 6.\n"
+        "- Never mention helplines or phone numbers (e.g. Talian Kasih 15999) and never "
+        "deflect the citizen elsewhere instead of explaining — hand-offs are the "
+        "Escalation agent's job, and the verified result cards already carry next-step "
+        "guidance. If the inputs confuse you, explain exactly what the verdicts say. "
+        "Where-to-apply guidance (JKM office, MyHASiL portal) is fine.\n"
         "- For an appeal letter, ground every claim in the citizen's stated facts and the "
         "programme's cited criteria. Produce the Malay text; you do not send anything.\n"
         "Your output is a draft — it is verified by the system before the citizen sees it."),

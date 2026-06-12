@@ -247,3 +247,44 @@ def test_final_output_text_joins_parts_of_final_message():
                  output_text="fallback")
     # An empty final message degrades to output_text rather than returning "".
     assert orchestrate._final_output_text(resp) == "fallback"
+
+
+# --- skip turn: flow control is deterministic, never the router's call ------------
+
+def test_chat_skip_asks_next_question_even_if_router_says_assess(monkeypatch):
+    # The Skip chip sends a fixed sentinel. It means "skip THIS question", which is
+    # flow control — handled before ROUTE, so a router that would misread it as
+    # "assess me now" (the premature mid-grill results bug) is never consulted.
+    calls = []
+    def fake(agent_id, _prompt):
+        calls.append(agent_id)
+        if agent_id == agents.ORCHESTRATOR.id:
+            return '{"action": "assess", "rationale_ms": "sebab"}'
+        return "Adakah anda seorang OKU?"
+    monkeypatch.setattr(orchestrate, "_invoke_agent", fake)
+    token = encode(ChatState(facts={"citizen": True}, asked=("citizen",)))
+    resp = client.post("/chat", json={"message": orchestrate.SKIP_SENTINEL_MS,
+                                      "lang": "ms", "token": token})
+    body = resp.json()
+    assert resp.status_code == 200 and body["action"] == "ask"
+    assert agents.ORCHESTRATOR.id not in calls            # router never consulted
+    assert any(s["stage"] == "ROUTE" and s["status"] == "skip" for s in body["trace"])
+    assert body["question"]["field"] != "citizen"         # moved on, not re-asked
+
+
+def test_chat_skip_when_interview_done_still_assesses(monkeypatch):
+    # Nothing left to ask → the sentinel must NOT block completion; normal routing
+    # proceeds and the turn assesses.
+    narrative = ("Anda layak menerima RM250 sebulan (BTB) dan RM50 sebulan (STR Bujang). "
+                 "Jumlah minimum bulanan anda ialah RM300.")
+    monkeypatch.setattr(orchestrate, "_invoke_agent",
+                        _route_to("assess", narrative=narrative))
+    done_facts = {**_OKU_FACTS, "marital_status": "single", "has_dependents": False,
+                  "is_working": False, "is_carer": False, "str_approved": False,
+                  "ekasih_listed": False}
+    token = encode(ChatState(facts=done_facts))
+    resp = client.post("/chat", json={"message": orchestrate.SKIP_SENTINEL_MS,
+                                      "lang": "ms", "token": token})
+    body = resp.json()
+    assert resp.status_code == 200 and body["action"] == "assess"
+    assert body["refused"] is False
