@@ -1,13 +1,19 @@
-# Keep the cloud-build upload small and the image clean. Only the four runtime
-# packages named in Dockerfile.mcp are COPYed in; everything else is excluded.
+# Shared build-context ignore for BOTH images built from this directory:
+#   Dockerfile      -> benefitnav-mcp (trust-core MCP server)
+#   Dockerfile.api  -> benefitnav-api (conductor: FastAPI + dual gate + web UI)
+# Keep the cloud-build upload small and images clean.
+#
+# IMPORTANT: web/ is intentionally NOT excluded — the conductor image COPYs it as the
+# static UI, so excluding it makes `az acr build -f Dockerfile.api` fail at `COPY web/`.
+# The MCP image simply doesn't COPY web/, so its presence in the context costs nothing.
 .venv/
 .venv-py39-backup/
 **/__pycache__/
 **/*.pyc
+**/.DS_Store
 .pytest_cache/
 .git/
 tests/
-web/
 *.md
 .env
 .env.*
