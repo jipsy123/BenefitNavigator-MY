@@ -139,3 +139,18 @@ def token_secret() -> str:
         "--secret-name", MCP_TOKEN_SECRET_NAME,
         "--query", "value", "-o", "tsv",
     )
+
+
+def azure_credential():
+    """Azure credential for Foundry Agent Service (data-plane) calls.
+
+    `DefaultAzureCredential` works in BOTH environments with no code change:
+      - locally it picks up your `az login` session (Azure CLI is in its chain);
+      - in the deployed conductor container it picks up the Container App's
+        system-assigned managed identity.
+    Imported lazily so the deterministic trust core (compute/) never needs the
+    azure-identity SDK merely to import this module.
+    """
+    from azure.identity import DefaultAzureCredential
+
+    return DefaultAzureCredential()
