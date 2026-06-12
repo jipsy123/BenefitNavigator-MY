@@ -112,11 +112,14 @@ class ChatTurn:
 
 @lru_cache(maxsize=1)
 def _project_client():
-    """AIProjectClient bound to the Foundry project (az-CLI auth; no secrets)."""
+    """AIProjectClient bound to the Foundry project.
+
+    Uses config.azure_credential() (DefaultAzureCredential) so the SAME code path
+    works locally via `az login` AND inside the deployed conductor via the Container
+    App's system-assigned managed identity — no code change between environments."""
     from azure.ai.projects import AIProjectClient
-    from azure.identity import AzureCliCredential
     return AIProjectClient(endpoint=config.FOUNDRY_PROJECT_ENDPOINT,
-                           credential=AzureCliCredential())
+                           credential=config.azure_credential())
 
 
 def _final_output_text(resp) -> str:
