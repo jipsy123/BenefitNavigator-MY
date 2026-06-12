@@ -91,6 +91,8 @@ PYTHONPATH="$PWD" .venv/bin/python -m uvicorn api.app:app --port 8011
 # open http://localhost:8011
 ```
 
+> **Deployed:** the conductor runs in Azure as the `benefitnav-api` Container App (see `infra/azure-resources.md`); `bash infra/deploy-api.sh` builds and ships it. Running locally with the command above is now **dev-only** and optional — the live demo is fully cloud-hosted (Foundry agents + the trust-core MCP app + this conductor), with no laptop in the loop: <https://benefitnav-api.ashyocean-f47e8ddf.swedencentral.azurecontainerapps.io>
+
 ---
 
 ## Tests

@@ -37,6 +37,15 @@ Smoke-tested 2026-06-09: chat → `SMOKE_OK`; embedding → 3072-dim vector. ✅
   az search admin-key show -g rg-benefitnav-my --service-name benefitnav-search-79c45 --query primaryKey -o tsv
   ```
 
+## Conductor Container App (api.app — FastAPI + dual gate + UI)
+- **App:** `benefitnav-api` · environment `benefitnav-mcp-env` · ingress external, target port 8000 · `min-replicas 1` (always-on, bills continuously)
+- **URL:** `https://benefitnav-api.ashyocean-f47e8ddf.swedencentral.azurecontainerapps.io` (UI at `/`, API at `/chat`) — deployed 2026-06-12, smoke PASS (the Orchestrator agent responded live, not a fallback)
+- **Image:** built from `Dockerfile.api` into ACR `ca7f0629eef3acr`
+- **Identity:** system-assigned managed identity, granted **`Azure AI Developer`** on `benefitnav-ai-sc-79c45` (this is what lets it invoke the Foundry agents in-cloud — no `az` in the container)
+- **Secrets (injected, never committed):** `BENEFITNAV_AOAI_KEY`, `BENEFITNAV_SEARCH_KEY`, `BENEFITNAV_TOKEN_SECRET` (the last COPIED from `benefitnav-mcp` so signed tokens verify on the trust core)
+- **Deploy / redeploy:** `bash infra/deploy-api.sh` (idempotent; ends with a smoke test that fails unless a Foundry agent actually responded)
+- **Build note:** the image COPYs `web/` (the static UI); the shared context-root `.dockerignore` must **not** exclude `web/`, or `az acr build -f Dockerfile.api` fails at `COPY web/`.
+
 ## Blob Storage (corpus host)
 - **Account:** `benefitnavstore79c45` · Standard_LRS · Hot · region `swedencentral`
 - **Container:** `corpus` — 6 `.gov.my` PDFs uploaded (source-of-truth for citations)
@@ -58,3 +67,5 @@ Smoke-tested 2026-06-09: chat → `SMOKE_OK`; embedding → 3072-dim vector. ✅
 ```bash
 bash benefitnav/infra/teardown.sh   # deletes the whole RG + purges soft-deleted accounts
 ```
+
+> `benefitnav-api` lives in `rg-benefitnav-my`, so `teardown.sh` (which deletes the whole RG) removes it too. To stop *only* the conductor's always-on billing without a full teardown: `az containerapp update -n benefitnav-api -g rg-benefitnav-my --min-replicas 0` (note: scale-to-zero adds a cold-start to the first request).
