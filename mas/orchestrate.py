@@ -191,6 +191,11 @@ def _invoke_agent_stream(agent_id: str, prompt: str) -> Iterator[tuple[str, str]
       ('reset', '')      — a new message item began (the Communicator's rewrite replaces
                            its draft); consumers showing live text should clear it.
       ('tool', name)     — the agent invoked an MCP trust tool (grill_next / grade / …).
+      ('tool_result', (name, output))
+                         — a hosted MCP tool finished; `output` is its raw JSON return
+                           string (deterministic — e.g. retrieve's passages). Emitted from
+                           the per-item `done` event and/or the final response, whichever
+                           carries a non-empty output.
       ('delta', text)    — a chunk of the agent's answer as it is generated.
       ('final', text)    — the authoritative final answer (last message only, matching
                            `_final_output_text`).
@@ -216,12 +221,34 @@ def _invoke_agent_stream(agent_id: str, prompt: str) -> Iterator[tuple[str, str]
                     name = getattr(item, "name", "") or ""
                     if name:
                         yield ("tool", name)
+            elif et == "response.output_item.done":
+                # Primary capture: a hosted MCP tool finished and (per Task 0 outcome 1) its
+                # McpCall item carries the deterministic tool OUTPUT — surface it so the
+                # conductor uses the function's real result, not the agent's retelling.
+                item = getattr(event, "item", None)
+                itype = getattr(item, "type", "") or ""
+                if any(k in itype for k in ("mcp", "tool", "function")):
+                    name = getattr(item, "name", "") or ""
+                    output = getattr(item, "output", "") or ""
+                    if name and output:
+                        yield ("tool_result", (name, output))
             elif et == "response.completed":
                 final_response = getattr(event, "response", None)
     except AgentUnavailable:
         raise
     except Exception as exc:  # noqa: BLE001 — a mid-stream death is a hard failure
         raise AgentUnavailable(f"{agent_id} stream died: {str(exc)[:200]}") from exc
+    # Secondary capture: the assembled final response carries every output item with its
+    # populated `output`. Re-emit any MCP tool outputs from here so capture is robust even
+    # if the per-item `done` event arrived without the output populated. _stream_retrieval
+    # only accepts a parseable result, so a duplicate/empty emission is harmless.
+    for fitem in (getattr(final_response, "output", None) or []):
+        fitype = getattr(fitem, "type", "") or ""
+        if any(k in fitype for k in ("mcp", "tool", "function")):
+            fname = getattr(fitem, "name", "") or ""
+            foutput = getattr(fitem, "output", "") or ""
+            if fname and foutput:
+                yield ("tool_result", (fname, foutput))
     final = (_final_output_text(final_response) if final_response is not None
              else "".join(msg_buf).strip())
     yield ("final", final)
