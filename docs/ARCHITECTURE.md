@@ -1,13 +1,10 @@
 # Architecture — BenefitNavigator Malaysia
 
-> **Diagrams pending regeneration (2026-06-13):** the PNGs in `docs/diagrams/` still show the
-> pre-change topology (6 agents; Assessor + Retrieval in-process). After this change: 5 agents,
-> Retrieval is a live agent calling `retrieve`, and there is no Assessor agent. Regenerate from
-> the mermaid sources above before publishing.
+![How BenefitNavigator uses Microsoft Azure AI Foundry — start at the citizen (top-left) and follow the numbered path through the conductor, the five Foundry agents, the MCP trust core, and Foundry IQ.](diagrams/benefitnav-foundry-architecture.png)
 
 A **multi-agent reasoning system on Azure AI Foundry**, conducted by a FastAPI service, with a deterministic trust core that the agents can reach **only** through an MCP server. The design separates the two things LLMs are good and bad at, and makes the separation *structural*: no agent can decide eligibility or state an amount, because the conductor recomputes the verdicts and a non-bypassable gate refuses anything that doesn't match.
 
-This document expands on the overview in [`../README.md`](../README.md) with three views: the **component diagram**, the **per-turn sequence**, and the **deployment / trust boundary**. The Mermaid sources below render on GitHub; pre-rendered PNGs are in [`diagrams/`](diagrams/) for slides and the submission form.
+The diagram above is the one-page view of **how the solution uses Microsoft Foundry** — begin at **① the citizen** (top-left) and follow the numbered path: the conductor routes the turn, the five gpt-4o agents in **Azure AI Foundry** do the language work, every fact is fetched through the **MCP trust core**, and the grounding corpus lives in **Foundry IQ**. The sections below expand each layer with Mermaid sources that render on GitHub — the **component diagram**, the **per-turn sequence**, and the **deployment / trust boundary**. Pre-rendered PNGs of the Foundry overview and the per-turn sequence are in [`diagrams/`](diagrams/) for slides and the submission form.
 
 ---
 

@@ -33,3 +33,17 @@ dist/
 web/_preview_*.html
 CONTROLLER-DESIGN.md
 docs/superpowers/
+
+# Office temp lock files (created while a deck is open)
+~$*
+
+# Embedded skill clone (its own git repo — not part of this project)
+excalidraw-diagram-skill/
+
+# Deck build workspace + internal scripts — the exported .pptx is what's committed
+docs/deck/
+docs/DEMO-VIDEO-SCRIPT.md
+
+# Diagram sources kept local — only the exported PNGs are committed to docs/diagrams/
+docs/diagrams/*.excalidraw
+docs/diagrams/build_foundry_diagram.py
