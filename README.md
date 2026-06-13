@@ -30,6 +30,11 @@ A benefits assistant that can *hallucinate an entitlement* is worse than no assi
 
 BenefitNavigator is a **multi-agent system on Azure AI Foundry** conducted by a FastAPI service. Five gpt-4o agents own the *language and flow* of the conversation; a deterministic trust core — reachable only through an MCP server — owns the *truth*.
 
+![How BenefitNavigator uses Microsoft Azure AI Foundry — start at the citizen (top-left) and follow the numbered path through the conductor, the five Foundry agents, the MCP trust core, and Foundry IQ.](docs/diagrams/benefitnav-foundry-architecture.png)
+
+<details>
+<summary><b>Component diagram</b> — the same system as Mermaid source (click to expand)</summary>
+
 ```mermaid
 flowchart TB
     subgraph CLIENT["🌐 Citizen"]
@@ -94,6 +99,8 @@ flowchart TB
     class CORE,COMPUTE,TH trust;
     class GATE gate;
 ```
+
+</details>
 
 The full architecture — the one-page **Foundry overview** plus the component, per-turn sequence, and deployment / trust-boundary views, with the design rationale — is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
