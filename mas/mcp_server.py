@@ -1,9 +1,9 @@
 """The trust-core MCP server — a thin transport binding over mas/trust_tools.
 
 This is the ONLY surface through which Foundry-hosted agents reach the deterministic
-core. It registers four tools (assess / optimize / grill_next / grade) and does nothing
-else: all logic lives in trust_tools, which is unit-tested independently. Keeping this
-layer dumb means the trust-critical code never depends on the MCP/SDK runtime.
+core. It registers five tools (assess / optimize / grill_next / grade / retrieve) and
+does nothing else: all logic lives in trust_tools, which is unit-tested independently.
+Keeping this layer dumb means the trust-critical code never depends on the MCP/SDK runtime.
 
 Transport: streamable-HTTP, stateless (each call is independent — matches our signed-
 token model and works behind the dev tunnel / a load balancer). The server is exposed
