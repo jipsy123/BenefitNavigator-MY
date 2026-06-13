@@ -102,6 +102,7 @@ sequenceDiagram
     participant CS as Content Safety
     participant O as Orchestrator agent
     participant S as Specialist agent
+    participant RET as Retrieval agent
     participant MCP as MCP trust core · benefitnav-mcp
     participant K as Foundry IQ · AI Search
 
@@ -118,8 +119,10 @@ sequenceDiagram
         S-->>API: warm Malay question
     else action = assess
         API->>API: compute.summarise() — verdicts + amounts (ground truth)
-        API->>K: retrieve cited .gov.my passages
-        K-->>API: extractive citations
+        API->>RET: invoke Retrieval agent (fail-hard)
+        RET->>K: retrieve(query_ms) — cited .gov.my passages
+        K-->>RET: extractive citations
+        RET-->>API: passages (deterministic tool output)
         API->>S: Communicator — narrate from verdicts only
         S-->>API: plain-Malay draft
     else action = escalate
@@ -157,7 +160,6 @@ flowchart LR
     end
 
     API -->|"managed identity (no keys)"| AGENTS
-    API -->|"compute.summarise / retrieve · in-process"| SEARCH
     API -->|"groundedness + shields"| CS
     AGENTS -.->|"MCP tools · HMAC token"| MCPC
     AGENTS --> SEARCH

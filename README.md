@@ -55,7 +55,7 @@ flowchart TB
     end
 
     subgraph MCP["🛠️ Trust-core MCP server — Container App: benefitnav-mcp"]
-        TOOLS["5 tools · assess · optimize · grill_next · grade · retrieve"]
+        TOOLS["5 tools · grill_next · grade · retrieve (live) · assess · optimize (latent)"]
     end
 
     subgraph KNOW["📚 Knowledge — Foundry IQ"]
@@ -105,7 +105,7 @@ A deeper view — the two diagrams plus the per-turn sequence — is in [`docs/A
 | **Interview** | Asks the single most decision-relevant question next, phrased warmly. It never *chooses* the field — `grill_next` does. | `grill_next` | ✓ on **ask** |
 | **Communicator** | Explains the verdict in plain Bahasa Melayu and drafts appeal letters — strictly from the supplied verdicts. | `grade` | ✓ on **assess** |
 | **Escalation** | Hands off to a human (Talian Kasih 15999, district JKM/LHDN) without a dead-end. | *(none)* | ✓ on **escalate** |
-| **Retrieval** | Formulates a Malay search query and calls `retrieve` to ground the narrative in cited `.gov.my` passages (the conductor uses the tool's deterministic output). | `retrieve` | live agent |
+| **Retrieval** | Formulates a Malay search query and calls `retrieve` to ground the narrative in cited `.gov.my` passages (the conductor uses the tool's deterministic output). | `retrieve` | live agent\* |
 
 \* **"FastAPI conducts, agents execute" (Option 1).** Same-project Foundry→Foundry A2A delegation is an open platform bug ([azure-sdk-for-python #47419](https://github.com/Azure/azure-sdk-for-python/issues/47419)), so the Orchestrator is a *tool-less router*: it returns a decision and the conductor invokes the chosen specialist directly via the Responses API. Verdicts are computed in-process (`compute.summarise`) because the **dual gate must own the trust-critical values** rather than round-trip them through an LLM — so there is no Assessor agent; the `assess`/`optimize` MCP tools remain as latent, unit-tested trust-core surface. Retrieval IS a live agent: it formulates the query and calls `retrieve`, and the conductor captures the tool's deterministic output.
 
@@ -120,6 +120,7 @@ sequenceDiagram
     participant CS as Content Safety
     participant O as Orchestrator agent
     participant S as Specialist agent
+    participant RET as Retrieval agent
     participant MCP as MCP trust core · benefitnav-mcp
     participant K as Foundry IQ · AI Search
 
@@ -136,8 +137,10 @@ sequenceDiagram
         S-->>API: warm Malay question
     else action = assess
         API->>API: compute.summarise() — verdicts + amounts (ground truth)
-        API->>K: retrieve cited .gov.my passages
-        K-->>API: extractive citations
+        API->>RET: invoke Retrieval agent (fail-hard)
+        RET->>K: retrieve(query_ms) — cited .gov.my passages
+        K-->>RET: extractive citations
+        RET-->>API: passages (deterministic tool output)
         API->>S: Communicator — narrate from verdicts only
         S-->>API: plain-Malay draft
     end
