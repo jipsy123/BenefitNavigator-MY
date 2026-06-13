@@ -320,11 +320,6 @@ bash infra/teardown.sh
 ---
 
 ## Honest limitations
-
-- **PGK is the one configurable value.** Every threshold is concrete from the corpus *except* the poverty line (PGK), which the gazetted JKM guideline references as "PGK semasa" without a fixed figure (it updates annually). It lives in `thresholds.json` as an agency-set reference value with an explicit note — not dressed up as fact.
-- **MVP scope:** JKM disability (BTB/EPC/BPT/BOT) + LHDN STR/SARA are in the deterministic checker. PERKESO RTW and housing (KPKM) are in the corpus for retrieval but not yet in the checker — adding a programme is a `thresholds.json` edit, not code.
 - **"FastAPI conducts, agents execute."** Same-project Foundry→Foundry A2A delegation is an open platform bug, so the delegation hop lives in the conductor rather than in a single Orchestrator-over-A2A call (see the [Architecture](#architecture) note). Genuine multi-agent on Foundry; only the network hop moved.
 - **gpt-4o quota.** The deployment is small (Standard, 50K TPM). Rapid back-to-back turns can 429 the shared deployment — the conductor retries once, then fails the turn hard (`action="error"`). A real demo (one call per turn) is comfortable.
-- **Synthetic PII only.** Never enter a real MyKad/NRIC; the system uses placeholders and never persists identifiers.
-- **i18n translates the explanation, not the chrome.** The generated narrative is translated to EN / 中文 / Tamil on demand; the UI labels are Malay-first (this is a Malay-first service for Malaysians).
-- **No data-residency claim.** gpt-4o runs on Azure GlobalStandard routing (quota reality on the trial subscription), so there is no in-Malaysia residency story.
+- **i18n translates the explanation, not the chrome.** The generated narrative is translated to EN / 中文 / Tamil on demand; the UI labels are Malay-first (because the data source are in Malay).
