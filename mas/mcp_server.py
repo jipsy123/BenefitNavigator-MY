@@ -102,13 +102,10 @@ def grade(text: str) -> dict:
     "locator). Grounding only — never an eligibility decision.",
 )
 def retrieve(query_ms: str) -> dict:
-    """Grounding retrieval. Degrades gracefully: verdicts never depend on this, so a
-    retrieval failure returns an empty passage list rather than erroring the agent."""
-    try:
-        passages = kb.retrieve_passages(query_ms, reasoning="low")
-        return {"passages": passages}
-    except Exception as exc:  # noqa: BLE001 — grounding is best-effort by design
-        return {"passages": [], "error": str(exc)[:200]}
+    """Grounding retrieval over the gazetted .gov.my corpus. Fail-hard: a knowledge-base
+    error propagates as a tool error so the calling agent's run reflects the failure and the
+    conductor ends the turn — there is no silent empty-grounding fallback."""
+    return {"passages": kb.retrieve_passages(query_ms, reasoning="low")}
 
 
 # ASGI app for mounting into FastAPI (one dev tunnel serves API + MCP).

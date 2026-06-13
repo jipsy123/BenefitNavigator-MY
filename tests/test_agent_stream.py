@@ -53,3 +53,19 @@ def test_invoke_agent_stream_captures_tool_output_from_final_response(monkeypatc
 
     assert ("tool_result", ("retrieve", '{"passages": [{"content": "y"}]}')) in events
     assert events[-1] == ("final", "hasil")
+
+
+def test_parse_passages_returns_list_on_valid_output():
+    assert orchestrate._parse_passages('{"passages": [{"content": "x"}]}') == [{"content": "x"}]
+
+
+def test_parse_passages_allows_genuine_empty_results():
+    # Retrieval ran and found nothing relevant — a valid result, not a failure.
+    assert orchestrate._parse_passages('{"passages": []}') == []
+
+
+def test_parse_passages_returns_none_on_failure_shapes():
+    assert orchestrate._parse_passages("") is None                       # tool errored / no output
+    assert orchestrate._parse_passages("not json") is None               # garbage
+    assert orchestrate._parse_passages('{"passages": [], "error": "kb down"}') is None
+    assert orchestrate._parse_passages('{"nope": 1}') is None            # wrong shape

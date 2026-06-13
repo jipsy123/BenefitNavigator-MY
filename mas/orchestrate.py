@@ -70,7 +70,6 @@ from agent.orchestrator import _BLOCKED_MS, _REFUSAL_MS
 from compute import checker, elicit
 from compute.status import Assessment, summarise
 from ingest import config
-from ingest import knowledge_base as kb
 
 from . import agents, trust_tools
 from .state import ChatState, InvalidToken, decode, encode
@@ -281,6 +280,22 @@ def _parse_contract(text: str) -> dict:
         return {}
 
 
+def _parse_passages(output: str) -> Optional[list[dict]]:
+    """Parse the `retrieve` tool's JSON output into a passages list. Returns None when the
+    tool produced nothing usable (blank/un-parseable output, an `error` key, or the wrong
+    shape) so the caller fails hard; returns the (possibly empty) list when retrieval
+    genuinely ran — an empty list means "searched, found nothing", which is a valid result."""
+    if not output:
+        return None
+    try:
+        data = json.loads(output)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(data, dict) or data.get("error") or not isinstance(data.get("passages"), list):
+        return None
+    return data["passages"]
+
+
 # --- ROUTE: the Orchestrator agent decides the action ----------------------------
 
 _ROUTER_INSTRUCTION = (
@@ -347,6 +362,16 @@ def _escalation_prompt(message: str, reason_ms: str) -> str:
         "Hasilkan mesej ringkas dan mesra dalam Bahasa Melayu yang mengarahkan rakyat "
         "kepada Talian Kasih 15999 dan pejabat JKM/LHDN daerah mereka. Jangan tinggalkan "
         "jalan buntu — beri kenalan seterusnya yang konkrit. Output HANYA teks mesej.")
+
+
+def _retrieval_prompt(message: str, situation_ms: str) -> str:
+    return (
+        f"SITUASI RAKYAT (untuk konteks):\n{situation_ms}\n\n"
+        f"MESEJ RAKYAT:\n{message}\n\n"
+        "Rumuskan satu pertanyaan carian ringkas dalam Bahasa Melayu tentang bantuan "
+        "kerajaan yang berkaitan, kemudian panggil retrieve(query_ms) dengan pertanyaan itu "
+        "untuk mendapatkan petikan rasmi .gov.my. Panggil retrieve SEKALI sahaja. Anda tidak "
+        "membuat keputusan kelayakan — petikan ini untuk grounding sahaja.")
 
 
 # --- deterministic situation summary (the router's guidance, not its decision) ----
@@ -507,6 +532,24 @@ def _stream_agent_text(agent_id: str, prompt: str, scope: str, *,
     return final
 
 
+def _stream_retrieval(agent_id: str, prompt: str) -> Iterator[dict]:
+    """Stream the Retrieval agent: surface its `retrieve` tool call as a wire event and
+    capture the tool's DETERMINISTIC output (passages from the KB — never the agent's prose).
+    Returns the passages list via generator return, or None if the agent produced no usable
+    retrieve result (the caller then fails hard). AgentUnavailable propagates (fail-hard)."""
+    passages: Optional[list[dict]] = None
+    for kind, payload in _invoke_agent_stream(agent_id, prompt):
+        if kind == "tool":
+            yield {"type": "tool", "agent": "retrieval", "tool": payload}
+        elif kind == "tool_result":
+            name, output = payload
+            if name == "retrieve":
+                parsed = _parse_passages(output)
+                if parsed is not None:        # never let an empty/dup emission clobber a hit
+                    passages = parsed
+    return passages
+
+
 # --- the turn ---------------------------------------------------------------------
 
 def run_chat_stream(message: str, token: Optional[str] = None,
@@ -648,20 +691,26 @@ def run_chat_stream(message: str, token: Optional[str] = None,
                 turn=state.turn + 1, lang=lang, translation_ok=tok_ok, trace=trace)}
             return
 
-    # action == ASSESS — verdicts in-process (ground truth), Communicator narrates.
+    # action == ASSESS — verdicts are computed in-process (ground truth), then the Retrieval
+    # agent grounds the narrative and the Communicator narrates. summarise() runs FIRST and
+    # never changes based on retrieval; but per the Foundry-or-fail decision, retrieval is a
+    # real agent on the critical path — there is NO in-process shadow, so if it cannot produce
+    # passages the turn fails hard (action="error") rather than degrading.
     assessment = summarise(applicant)
-    passages: list[dict] = []
-    # RETRIEVE is the ONE graceful exception to fail-hard: the invariant is that verdicts
-    # never depend on retrieval succeeding, so a knowledge-base hiccup degrades grounding
-    # rather than sinking an assessment whose verdicts are already valid.
+
+    yield {"type": "agent", "agent": "retrieval", "phase": "start"}
     try:
-        passages = kb.retrieve_passages(extracted.retrieval_query_ms or message, reasoning="low")
-    except Exception as exc:  # noqa: BLE001 — groundedness degrades, verdicts don't
-        trace.append({"stage": "RETRIEVE", "status": "error", "detail": str(exc)[:120]})
-        yield {"type": "stage", "stage": "RETRIEVE", "status": "error"}
-    else:
-        trace.append({"stage": "RETRIEVE", "status": "ok", "passages": len(passages)})
-        yield {"type": "stage", "stage": "RETRIEVE", "status": "ok", "passages": len(passages)}
+        passages = yield from _stream_retrieval(
+            agents.RETRIEVAL.id, _retrieval_prompt(message, situation))
+    except AgentUnavailable as exc:
+        yield from _fail(base_state, lang, trace, "RETRIEVE", exc)
+        return
+    if passages is None:
+        yield from _fail(base_state, lang, trace, "RETRIEVE",
+                         AgentUnavailable("retrieval agent produced no usable passages"))
+        return
+    trace.append({"stage": "RETRIEVE", "status": "ok", "passages": len(passages)})
+    yield {"type": "stage", "stage": "RETRIEVE", "status": "ok", "passages": len(passages)}
 
     facts_text = narrate.build_facts_text(assessment)
     yield {"type": "agent", "agent": "communicator", "phase": "start"}

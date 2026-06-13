@@ -47,7 +47,6 @@ def _stub_boundaries(monkeypatch):
                         lambda _t: IntakeResult(applicant=elicit.to_applicant({}),
                                                 assumptions_ms=(), retrieval_query_ms="q",
                                                 facts={}))
-    monkeypatch.setattr(orchestrate.kb, "retrieve_passages", lambda *a, **k: [])
     # Groundedness unavailable by default → only the deterministic amount guard decides.
     monkeypatch.setattr(orchestrate.safety, "detect_groundedness",
                         lambda *a, **k: SimpleNamespace(available=False, grounded=True,
@@ -55,14 +54,18 @@ def _stub_boundaries(monkeypatch):
                                                         threshold=0.0))
 
 
-def _route_to(action: str, *, narrative: str):
-    """Build a fake _invoke_agent_stream that routes to `action` and gives specialists a
-    canned narrative — dispatching on which agent FastAPI invokes. It yields the low-level
-    invoker protocol: a ('delta', …) chunk (so the streaming path is exercised) then the
-    authoritative ('final', …)."""
+def _route_to(action: str, *, narrative: str, passages: str = '{"passages": []}'):
+    """Fake _invoke_agent_stream dispatching on which agent FastAPI invokes. The Retrieval
+    agent yields its `retrieve` tool call + the deterministic tool OUTPUT (Mode B); the other
+    specialists yield a canned narrative. `passages` is the raw JSON the retrieve tool returns."""
     def fake_stream(agent_id, _prompt):
         if agent_id == agents.ORCHESTRATOR.id:
             yield ("final", f'{{"action": "{action}", "rationale_ms": "sebab"}}')
+            return
+        if agent_id == agents.RETRIEVAL.id:
+            yield ("tool", "retrieve")
+            yield ("tool_result", ("retrieve", passages))
+            yield ("final", "")
             return
         if narrative:                       # interview / communicator / escalation
             yield ("delta", narrative)
@@ -409,3 +412,36 @@ def test_chat_skip_when_interview_done_still_assesses(monkeypatch):
     body = resp.json()
     assert resp.status_code == 200 and body["action"] == "assess"
     assert body["refused"] is False
+
+
+def test_chat_assess_grounds_via_retrieval_agent(monkeypatch):
+    # The Retrieval agent calls retrieve and returns one passage; the assess turn succeeds
+    # and the RETRIEVE stage reports the captured passage count.
+    monkeypatch.setattr(orchestrate, "_invoke_agent_stream",
+        _route_to("assess", narrative="Anda layak menerima BTB RM250 dan STR RM50.",
+                  passages='{"passages": [{"content": "Garis panduan JKM..."}]}'))
+    resp = client.post("/chat", json={"message": "nilai sekarang",
+                                      "token": _token(_OKU_FACTS), "lang": "ms"})
+    body = resp.json()
+    assert resp.status_code == 200 and body["action"] == "assess"
+    assert any(s["stage"] == "RETRIEVE" and s["status"] == "ok" and s["passages"] == 1
+               for s in body["trace"])
+
+
+def test_chat_assess_fails_hard_when_retrieval_agent_skips_the_tool(monkeypatch):
+    # Retrieval agent runs but never calls retrieve → no usable passages. Under Foundry-or-fail
+    # there is no in-process shadow: the turn fails (action="error").
+    def fake(agent_id, _prompt):
+        if agent_id == agents.ORCHESTRATOR.id:
+            yield ("final", '{"action": "assess", "rationale_ms": "sebab"}')
+            return
+        if agent_id == agents.RETRIEVAL.id:
+            yield ("final", "")          # never invoked retrieve → no tool_result
+            return
+        yield ("final", "Anda layak menerima bantuan.")
+    monkeypatch.setattr(orchestrate, "_invoke_agent_stream", fake)
+    resp = client.post("/chat", json={"message": "tolong nilai sekarang",
+                                      "token": _token(_OKU_FACTS), "lang": "ms"})
+    body = resp.json()
+    assert resp.status_code == 200 and body["action"] == "error"
+    assert any(s["stage"] == "RETRIEVE" and s["status"] == "error" for s in body["trace"])
