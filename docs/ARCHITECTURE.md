@@ -120,8 +120,10 @@ sequenceDiagram
     else action = assess
         API->>API: compute.summarise() — verdicts + amounts (ground truth)
         API->>RET: invoke Retrieval agent (fail-hard)
-        RET->>K: retrieve(query_ms) — cited .gov.my passages
-        K-->>RET: extractive citations
+        RET->>MCP: retrieve(query_ms)
+        MCP->>K: search gazetted .gov.my corpus
+        K-->>MCP: cited passages
+        MCP-->>RET: cited passages
         RET-->>API: passages (deterministic tool output)
         API->>S: Communicator — narrate from verdicts only
         S-->>API: plain-Malay draft
