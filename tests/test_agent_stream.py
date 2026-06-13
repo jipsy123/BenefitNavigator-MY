@@ -32,6 +32,9 @@ def test_invoke_agent_stream_captures_tool_output_from_done_event(monkeypatch):
     assert ("tool", "retrieve") in events
     assert ("tool_result", ("retrieve", '{"passages": [{"content": "x"}]}')) in events
     assert events[-1] == ("final", "hasil")
+    assert events.index(("tool", "retrieve")) < events.index(
+        ("tool_result", ("retrieve", '{"passages": [{"content": "x"}]}'))
+    )
 
 
 def test_invoke_agent_stream_captures_tool_output_from_final_response(monkeypatch):

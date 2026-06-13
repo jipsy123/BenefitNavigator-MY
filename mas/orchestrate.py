@@ -63,7 +63,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from functools import lru_cache
 from types import SimpleNamespace
-from typing import Optional
+from typing import Optional, Union
 
 from agent import assumptions, intake, localize, narrate, safety, verify
 from agent.orchestrator import _BLOCKED_MS, _REFUSAL_MS
@@ -186,7 +186,9 @@ def _open_agent_stream(agent_id: str, prompt: str):
     raise AgentUnavailable(f"{agent_id}: {str(last_exc)[:200]}")
 
 
-def _invoke_agent_stream(agent_id: str, prompt: str) -> Iterator[tuple[str, str]]:
+def _invoke_agent_stream(
+    agent_id: str, prompt: str
+) -> Iterator[Union[tuple[str, str], tuple[str, tuple[str, str]]]]:
     """Stream one hosted Foundry agent. Yields, in order:
       ('reset', '')      — a new message item began (the Communicator's rewrite replaces
                            its draft); consumers showing live text should clear it.
@@ -499,6 +501,7 @@ def _stream_agent_text(agent_id: str, prompt: str, scope: str, *,
                 yield {"type": "reset", "scope": scope}
         elif kind == "tool":
             yield {"type": "tool", "agent": scope, "tool": payload}
+            # 'tool_result' is intentionally not forwarded here — only _stream_retrieval consumes it.
         elif kind == "final":
             final = payload
     return final
