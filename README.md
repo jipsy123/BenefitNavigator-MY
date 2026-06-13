@@ -95,7 +95,7 @@ flowchart TB
     class GATE gate;
 ```
 
-A deeper view — the two diagrams plus the per-turn sequence — is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+The full architecture — the one-page **Foundry overview** plus the component, per-turn sequence, and deployment / trust-boundary views, with the design rationale — is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ### The five Foundry agents
 
@@ -240,6 +240,7 @@ BENEFITNAV_MCP_URL="https://benefitnav-mcp.ashyocean-f47e8ddf.swedencentral.azur
 | Endpoint | Purpose |
 |---|---|
 | `POST /chat` | Advance one conversation turn through the multi-agent layer, with the dual gate enforced. Returns the new signed `token`, the localized `reply`, and (on an assess turn) the verified `result` + `canonical_ms`. |
+| `POST /chat/stream` | The same turn as `/chat`, streamed as Server-Sent Events — emits per-stage and per-agent progress (which agent is running, the MCP trust tools it calls, the question/narrative forming token-by-token), then a terminal `done` (verified turn) or `error` (a Foundry agent was unreachable — fail-hard) event. The dual safety gate still runs server-side before any `done` is emitted. This is the path the UI uses for the live demo. |
 | `POST /appeal` | Draft a *surat rayuan* for one near-miss programme, localized. |
 | `POST /localize` | Re-localize an already-verified Malay payload into another language (instant toggles — no re-run). |
 | `GET /health` | Liveness + supported languages. |
