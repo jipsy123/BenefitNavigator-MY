@@ -1,4 +1,4 @@
-"""Declarative definitions of the six agents — instructions and tools.
+"""Declarative definitions of the five agents — instructions and tools.
 
 This module is pure data: no Azure, no SDK. The provisioning step (mas/provision.py)
 iterates over AGENTS to create each one in Foundry Agent Service and attach each
@@ -16,7 +16,7 @@ routing decision, then invokes the chosen specialist directly (the proven Respon
 path). Each specialist owns one job and a small set of MCP tools on the trust core.
 
     FastAPI ──routes via──> Orchestrator (decision only)
-            ──executes────> Interview | Retrieval | Assessor | Communicator | Escalation
+            ──executes────> Interview | Retrieval | Communicator | Escalation
 """
 from __future__ import annotations
 
@@ -64,7 +64,7 @@ def _instr(body: str) -> str:
     return f"{_TRUST_PREAMBLE}\n\n{body}"
 
 
-# --- the five specialists --------------------------------------------------------
+# --- the four specialists --------------------------------------------------------
 
 INTERVIEW = AgentSpec(
     id="interview",
@@ -99,22 +99,6 @@ RETRIEVAL = AgentSpec(
         "Return passages and citations only — never interpret them into an eligibility "
         "decision. If retrieval finds nothing useful, say so plainly; the assessment "
         "does not depend on you succeeding."),
-)
-
-ASSESSOR = AgentSpec(
-    id="assessor",
-    display_name="Assessor Agent",
-    incoming_a2a=True,
-    tools=(ToolSpec(TOOL_MCP, "assess"), ToolSpec(TOOL_MCP, "optimize")),
-    instructions=_instr(
-        "Your job: obtain the deterministic verdict and relay it verbatim.\n"
-        "1. Call assess(state_token). It returns the eligible programmes (with amounts "
-        "and citations), the near-miss/blocked gaps, and the guaranteed monthly floor.\n"
-        "2. If the result has near-miss gaps, also call optimize(state_token) to get the "
-        "ordered unlock plan (which registrations add the most RM).\n"
-        "Relay the tool outputs exactly as returned. You MUST NOT change, round, "
-        "summarise away, or add any amount or verdict — you are a conduit for the "
-        "deterministic core, not a judge."),
 )
 
 COMMUNICATOR = AgentSpec(
@@ -157,7 +141,7 @@ ESCALATION = AgentSpec(
 )
 
 SPECIALISTS: tuple[AgentSpec, ...] = (
-    INTERVIEW, RETRIEVAL, ASSESSOR, COMMUNICATOR, ESCALATION)
+    INTERVIEW, RETRIEVAL, COMMUNICATOR, ESCALATION)
 
 
 # --- the orchestrator (router; FastAPI executes the chosen specialist) -----------
