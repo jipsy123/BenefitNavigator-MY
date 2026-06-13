@@ -24,12 +24,13 @@ language is never re-translated. Synthetic PII only — never send a real NRIC/M
 """
 from __future__ import annotations
 
+import json
 from dataclasses import asdict
 from pathlib import Path
 from typing import Literal, Optional
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -85,6 +86,45 @@ def chat(req: ChatRequest) -> dict:
     except ValueError as exc:                       # invalid/expired state token
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return asdict(turn)
+
+
+def _sse(event: dict) -> str:
+    """Frame one run_chat_stream event as a Server-Sent Events `data:` line. The terminal
+    `done`/`error` event carries a ChatTurn object; we flatten it (via asdict) to the SAME
+    top-level shape `/chat` returns, plus the `type` tag, so the client renders it with the
+    existing turn handler. All other events are already JSON-serialisable."""
+    if event.get("type") in ("done", "error"):
+        payload = {"type": event["type"], **asdict(event["turn"])}
+        if event["type"] == "error":
+            payload["detail"] = event.get("detail", "")
+            payload["error_stage"] = event.get("stage", "")
+    else:
+        payload = event
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+@app.post("/chat/stream")
+def chat_stream(req: ChatRequest) -> StreamingResponse:
+    """Identical to /chat but streamed (Server-Sent Events): emits meaningful per-stage and
+    per-agent progress (which agent is running, the MCP trust tools it calls, and the
+    question/narrative forming token-by-token), then a terminal `done` (verified turn) or
+    `error` (a Foundry agent was unreachable — fail-hard, no local answer). The dual safety
+    gate still runs server-side before any `done` is emitted."""
+    _check_lang(req.lang)
+
+    def gen():
+        try:
+            for event in orchestrate.run_chat_stream(req.message, req.token, req.lang):
+                yield _sse(event)
+        except ValueError as exc:                   # invalid/expired state token
+            err = json.dumps({"type": "error", "fatal": True, "detail": str(exc)},
+                             ensure_ascii=False)
+            yield f"data: {err}\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no",
+                                      "Connection": "keep-alive"})
 
 
 @app.post("/appeal")

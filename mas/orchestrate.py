@@ -33,8 +33,24 @@ the explanation, the hand-off). The trust spine here decides *truth*:
   - Groundedness (Azure Content Safety) runs on assessment narratives.
   - Any gate failure ⇒ refuse and route to a human (Talian Kasih 15999).
 
-If an agent call or its routing JSON fails, we fall back to a deterministic action and
-a template question/refusal so the turn still completes safely (fail-closed).
+FAIL-HARD (Foundry-or-fail). This is a deliberate product decision: the system must
+genuinely use the Foundry multi-agent layer, so there is NO local substitute for an
+agent's job. If the Orchestrator, Interview, Communicator, or Escalation agent is
+unavailable (after one retry) or returns an unusable result, the turn FAILS with an
+`error` action — we never phrase a question, route, or narrate locally in its place.
+The one survivor is grounding RETRIEVE (kept in try/except), because the trust core's
+invariant is that verdicts never depend on retrieval succeeding.
+
+What is NOT a "local fallback" and therefore stays: the deterministic trust core
+(`compute/`, reached by agents as MCP tools), the independent in-process verdict
+recompute the gate verifies against, the dual safety gate, and the prompt-injection
+shield — no agent does these; they are the spine the agents act through.
+
+Streaming. `run_chat_stream` is the single pipeline: it yields meaningful progress
+events (stage checks, which agent is running, the real MCP tool calls it makes, and the
+question/narrative forming token-by-token) and ends with a terminal `done`/`error`
+event. `run_chat` consumes it and returns the final `ChatTurn`, so the streamed demo
+path and the JSON `/chat` path (and the test suite) exercise the SAME code.
 
 All transforms are pure: the inbound ChatState is never mutated; a new one is signed.
 """
@@ -42,6 +58,8 @@ from __future__ import annotations
 
 import json
 import logging
+import time
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from functools import lru_cache
 from types import SimpleNamespace
@@ -64,7 +82,18 @@ ACTION_ASK = "ask"
 ACTION_ASSESS = "assess"
 ACTION_ESCALATE = "escalate"
 ACTION_REFUSE = "refuse"
+ACTION_ERROR = "error"          # produced only when a Foundry agent is unreachable (fail-hard)
 _AGENT_ACTIONS = {ACTION_ASK, ACTION_ASSESS, ACTION_ESCALATE}
+
+# Agent calls retry a few times before failing — still 100% Foundry (a retry is not a
+# local fallback), just insurance against a transient 429 / malformed run. The heaviest
+# call (assess → Communicator) is the one most likely to brush the shared TPM ceiling, so
+# the window must be wide enough to ride out a brief rate-limit blip yet still surface a
+# genuine outage fast: 3 tries with 1.2s·(attempt) backoff ≈ 3.6s worst case before fail.
+# We deliberately do NOT honour a full Retry-After (could be 30–60s) — a long hang mid-demo
+# is worse UX than a quick fail + retry banner.
+_AGENT_ATTEMPTS = 3
+_AGENT_BACKOFF_S = 1.2
 
 _MAX_PASSAGES_FOR_NARRATION = 4
 _PASSAGE_SNIPPET_CHARS = 600
@@ -74,18 +103,6 @@ _PASSAGE_SNIPPET_CHARS = 600
 # it is handled deterministically before ROUTE (the router used to read it as "give me
 # my result now" and produced premature mid-interview assessments).
 SKIP_SENTINEL_MS = "Saya tidak pasti tentang soalan itu dan ingin melangkaunya."
-
-# Shown as the assessment's lead paragraph when the Communicator agent is unavailable
-# (e.g. a transient 429). It is a fixed, claim-free framing line — it states NO amount and
-# NO verdict, so it cannot fabricate; the verified eligible/near-miss CARDS (straight from
-# compute/) carry every figure and citation. Because it is deterministic prose with nothing
-# to ground, only the amount guard applies (it has no RM, so it passes by construction).
-_DEGRADED_NARRATIVE_MS = (
-    "Berikut keputusan kelayakan anda berdasarkan maklumat yang anda berikan, disemak "
-    "dengan sumber rasmi kerajaan. Bantuan yang anda layak, bantuan yang hampir layak, "
-    "dan langkah seterusnya disenaraikan di bawah — setiap satu dengan sumbernya."
-)
-
 
 @dataclass(frozen=True)
 class ChatTurn:
@@ -141,26 +158,83 @@ def _final_output_text(resp) -> str:
     return (getattr(resp, "output_text", "") or "").strip()
 
 
-def _invoke_agent(agent_id: str, prompt: str) -> str:
-    """Invoke one hosted Foundry agent by name via the Responses API and return its
-    final text. This is the validated direct-invocation path (probe_agent.py): the
-    agent runs its instructions and calls its MCP tools on the live container."""
+class AgentUnavailable(RuntimeError):
+    """A hosted Foundry agent could not produce a result (run failed to start, died
+    mid-stream, or returned nothing). Under fail-hard there is no local substitute, so
+    the turn ends with an `error` action — never a locally-synthesised answer."""
+
+
+def _open_agent_stream(agent_id: str, prompt: str):
+    """Start a streaming Responses run for one hosted Foundry agent, retrying transient
+    failures at creation (e.g. a 429 before any token). A retry is still 100% Foundry —
+    it is insurance, not a local fallback. Raises AgentUnavailable when out of attempts."""
     client = _project_client().get_openai_client()
-    resp = client.responses.create(
-        input=prompt,
-        extra_body={"agent_reference": {"type": "agent_reference", "name": agent_id}},
-    )
-    return _final_output_text(resp)
+    last_exc: Optional[Exception] = None
+    for attempt in range(_AGENT_ATTEMPTS):
+        try:
+            return client.responses.create(
+                input=prompt,
+                extra_body={"agent_reference": {"type": "agent_reference", "name": agent_id}},
+                stream=True,
+            )
+        except Exception as exc:  # noqa: BLE001 — retry transient, then fail hard
+            last_exc = exc
+            logger.warning("Agent %s create failed (attempt %d/%d): %s",
+                           agent_id, attempt + 1, _AGENT_ATTEMPTS, str(exc)[:160])
+            if attempt + 1 < _AGENT_ATTEMPTS:
+                time.sleep(_AGENT_BACKOFF_S * (attempt + 1))
+    raise AgentUnavailable(f"{agent_id}: {str(last_exc)[:200]}")
 
 
-def _safe_invoke_agent(agent_id: str, prompt: str) -> str:
-    """Invoke an agent, returning "" on any error so the caller can fall back
-    deterministically (fail-closed: a dead agent never produces an unsafe answer)."""
+def _invoke_agent_stream(agent_id: str, prompt: str) -> Iterator[tuple[str, str]]:
+    """Stream one hosted Foundry agent. Yields, in order:
+      ('reset', '')      — a new message item began (the Communicator's rewrite replaces
+                           its draft); consumers showing live text should clear it.
+      ('tool', name)     — the agent invoked an MCP trust tool (grill_next / grade / …).
+      ('delta', text)    — a chunk of the agent's answer as it is generated.
+      ('final', text)    — the authoritative final answer (last message only, matching
+                           `_final_output_text`).
+    Raises AgentUnavailable if the run cannot start or dies mid-stream (fail-hard)."""
+    stream = _open_agent_stream(agent_id, prompt)
+    final_response = None
+    msg_buf: list[str] = []
     try:
-        return _invoke_agent(agent_id, prompt)
-    except Exception as exc:  # noqa: BLE001 — degrade to a deterministic fallback
-        logger.warning("Agent %s invocation failed: %s", agent_id, str(exc)[:200])
-        return ""
+        for event in stream:
+            et = getattr(event, "type", "") or ""
+            if et == "response.output_text.delta":
+                delta = getattr(event, "delta", "") or ""
+                if delta:
+                    msg_buf.append(delta)
+                    yield ("delta", delta)
+            elif et == "response.output_item.added":
+                item = getattr(event, "item", None)
+                itype = getattr(item, "type", "") or ""
+                if itype == "message":
+                    msg_buf = []                       # keep only the latest message
+                    yield ("reset", "")
+                elif any(k in itype for k in ("mcp", "tool", "function")):
+                    name = getattr(item, "name", "") or ""
+                    if name:
+                        yield ("tool", name)
+            elif et == "response.completed":
+                final_response = getattr(event, "response", None)
+    except AgentUnavailable:
+        raise
+    except Exception as exc:  # noqa: BLE001 — a mid-stream death is a hard failure
+        raise AgentUnavailable(f"{agent_id} stream died: {str(exc)[:200]}") from exc
+    final = (_final_output_text(final_response) if final_response is not None
+             else "".join(msg_buf).strip())
+    yield ("final", final)
+
+
+def _invoke_agent(agent_id: str, prompt: str) -> str:
+    """Consume an agent stream and return only its final text — for callers that do not
+    surface tokens (the router and the escalation hand-off). Raises AgentUnavailable."""
+    final = ""
+    for kind, payload in _invoke_agent_stream(agent_id, prompt):
+        if kind == "final":
+            final = payload
+    return final
 
 
 def _parse_contract(text: str) -> dict:
@@ -192,11 +266,13 @@ _ROUTER_INSTRUCTION = (
 
 
 def _route(message: str, situation_ms: str) -> dict:
-    """Invoke the Orchestrator agent (tool-less router) for a routing decision. Returns
-    {} on any failure so the caller falls back to the deterministic action."""
+    """Invoke the Orchestrator agent (tool-less router) for a routing decision. Raises
+    AgentUnavailable if the agent is unreachable (fail-hard — no deterministic default);
+    returns {} only when the agent replied with unparseable text (also a hard failure,
+    handled by the caller)."""
     prompt = (f"SITUATION (deterministic, already trust-checked):\n{situation_ms}\n\n"
               f"CITIZEN MESSAGE:\n{message}\n\n{_ROUTER_INSTRUCTION}")
-    return _parse_contract(_safe_invoke_agent(agents.ORCHESTRATOR.id, prompt))
+    return _parse_contract(_invoke_agent(agents.ORCHESTRATOR.id, prompt))
 
 
 # --- NARRATE: the matching specialist produces the user-facing text --------------
@@ -332,14 +408,6 @@ def _assessment_payload(narrative_ms: str, applicant, assessment: Assessment,
     }
 
 
-def _template_question_ms(need: elicit.FieldNeed) -> str:
-    """Deterministic Malay fallback when the agent's phrasing is unusable. The client
-    renders the real, field-specific question from the returned `question` dict (it has
-    per-field i18n templates), so this conversational line stays generic — it never
-    exposes a raw internal field id."""
-    return "Boleh kongsi sedikit maklumat lagi supaya kami boleh menyemak kelayakan anda?"
-
-
 # --- localisation helper ---------------------------------------------------------
 
 def _localize_text(text_ms: str, lang: str) -> tuple[str, bool]:
@@ -360,11 +428,65 @@ def _refusal_turn(state: ChatState, lang: str, message_ms: str, *, action: str,
                     turn=state.turn + 1, lang=lang, translation_ok=ok, trace=trace)
 
 
+# --- fail-hard helpers -----------------------------------------------------------
+
+def _error_turn(state: ChatState, lang: str, trace: list[dict]) -> ChatTurn:
+    """A fail-hard terminal turn: a Foundry agent was unreachable and there is NO local
+    substitute. It carries no benefit answer — `reply`/`reply_ms` are empty and the client
+    renders a localized 'service unavailable, please retry' notice from its own i18n (so we
+    don't lean on the Translator during an outage). This is a failure, not a degraded answer."""
+    token = encode(state.evolve(turn=state.turn + 1, lang=lang))
+    return ChatTurn(token=token, action=ACTION_ERROR, reply="", reply_ms="",
+                    turn=state.turn + 1, lang=lang, translation_ok=True, trace=trace)
+
+
+def _fail(state: ChatState, lang: str, trace: list[dict], stage: str,
+          exc: Exception) -> Iterator[dict]:
+    """Record the stage failure and yield a terminal `error` event (Foundry-or-fail)."""
+    logger.warning("Fail-hard at %s: %s", stage, str(exc)[:200])
+    trace.append({"stage": stage, "status": "error", "detail": str(exc)[:120]})
+    yield {"type": "error", "stage": stage, "detail": str(exc)[:200],
+           "turn": _error_turn(state, lang, trace)}
+
+
+def _stream_agent_text(agent_id: str, prompt: str, scope: str, *,
+                       reveal: bool = True) -> Iterator[dict]:
+    """Stream a specialist's run, translating the low-level invoker events into wire
+    events scoped to `scope` (question / narrative / escalation). Returns the final text
+    via generator return (capture with `final = yield from _stream_agent_text(...)`).
+    AgentUnavailable propagates to the caller (fail-hard).
+
+    reveal=False (the assessment narrative): forward only the agent's *activity* (its MCP
+    trust-tool calls), NOT its raw text. The narrative must clear the dual safety gate
+    BEFORE the user sees a single token — otherwise a fabricated RM would flash on screen
+    a beat before the gate flips it to a refusal. So the verified text is revealed only in
+    the terminal `done` event, after `_gate`. The question (amount-guard only, ~never
+    quotes RM) keeps reveal=True so the citizen watches it form."""
+    final = ""
+    for kind, payload in _invoke_agent_stream(agent_id, prompt):
+        if kind == "delta":
+            if reveal:
+                yield {"type": "delta", "scope": scope, "text": payload}
+        elif kind == "reset":
+            if reveal:
+                yield {"type": "reset", "scope": scope}
+        elif kind == "tool":
+            yield {"type": "tool", "agent": scope, "tool": payload}
+        elif kind == "final":
+            final = payload
+    return final
+
+
 # --- the turn ---------------------------------------------------------------------
 
-def run_chat(message: str, token: Optional[str] = None, lang: str = "en") -> ChatTurn:
-    """Advance the conversation by one turn. `token` is the signed state from the
-    previous turn (None on the first turn)."""
+def run_chat_stream(message: str, token: Optional[str] = None,
+                    lang: str = "en") -> Iterator[dict]:
+    """Advance the conversation by one turn, yielding meaningful progress events and a
+    terminal `done` (verified turn) or `error` (Foundry unreachable) event. This is the
+    single pipeline; `run_chat` consumes it for the JSON `/chat` path and the tests.
+
+    Event shapes (all JSON-serialisable except the terminal `turn`, a ChatTurn the caller
+    serialises): `stage`, `agent` (start/done), `tool`, `reset`, `delta`, `done`, `error`."""
     trace: list[dict] = []
 
     # 0) State -----------------------------------------------------------------
@@ -373,16 +495,22 @@ def run_chat(message: str, token: Optional[str] = None, lang: str = "en") -> Cha
     except InvalidToken as exc:
         raise ValueError(f"invalid state token: {exc}") from exc
 
-    # 1) Prompt shield on untrusted free text ----------------------------------
+    # 1) Prompt shield on untrusted free text (no agent does this — it stays) ---
     shield = safety.shield_prompt(message)
     if shield.available and shield.attack_detected:
         trace.append({"stage": "SHIELD", "status": "blocked"})
-        return _refusal_turn(state, lang, _BLOCKED_MS, action=ACTION_ESCALATE, trace=trace)
-    trace.append({"stage": "SHIELD", "status": "ok" if shield.available else "unavailable"})
+        yield {"type": "stage", "stage": "SHIELD", "status": "blocked"}
+        yield {"type": "done",
+               "turn": _refusal_turn(state, lang, _BLOCKED_MS, action=ACTION_ESCALATE,
+                                     trace=trace)}
+        return
+    s_status = "ok" if shield.available else "unavailable"
+    trace.append({"stage": "SHIELD", "status": s_status})
+    yield {"type": "stage", "stage": "SHIELD", "status": s_status}
 
-    # 2) Intake — extract stated facts; never invent. Resilient: a transient model error
-    #    (e.g. 429) degrades to "no new facts this turn" rather than failing the whole turn.
-    #    `asked` still advances and the deterministic verdicts never depend on intake.
+    # 2) Intake — KEPT (no agent produces the signed, trusted fact set; FastAPI must
+    #    extract → sanitize → sign into the HMAC token). It degrades to "no new facts"
+    #    on a transient error rather than failing the turn — the verdicts never need it.
     try:
         extracted = intake.run_intake(message)
         intake_ok = True
@@ -396,8 +524,10 @@ def run_chat(message: str, token: Optional[str] = None, lang: str = "en") -> Cha
     known = elicit.with_presumed(facts, presumed)
     need = elicit.next_field(known, asked)
     interview_done = need is None
-    trace.append({"stage": "INTAKE", "status": "ok" if intake_ok else "degraded",
-                  "answered": elicit.progress(known, asked)})
+    answered = elicit.progress(known, asked)
+    i_status = "ok" if intake_ok else "degraded"
+    trace.append({"stage": "INTAKE", "status": i_status, "answered": answered})
+    yield {"type": "stage", "stage": "INTAKE", "status": i_status, "answered": answered}
 
     base_state = state.evolve(facts=facts, presumed=presumed, asked=tuple(asked),
                               retrieval_query_ms=extracted.retrieval_query_ms, lang=lang)
@@ -405,89 +535,133 @@ def run_chat(message: str, token: Optional[str] = None, lang: str = "en") -> Cha
     situation = _situation_ms(known, need, state.assessment is not None)
     applicant = elicit.to_applicant(known)
 
-    # 3) ROUTE — the Orchestrator agent decides the action (deterministic fallback).
-    #    The skip sentinel never reaches the router: skipping one question is flow
-    #    control, and the asked-fields spine already advances past it (next_field
-    #    excludes asked fields), so the only correct action is to ask the next one.
+    # 3) ROUTE — the Orchestrator agent decides the action. No deterministic default:
+    #    if it is unreachable or returns no valid action, the turn FAILS (fail-hard).
+    #    The skip sentinel is flow control (no agent does it) and is handled here.
     if message.strip() == SKIP_SENTINEL_MS and not interview_done:
         action, rationale_ms = ACTION_ASK, ""
         trace.append({"stage": "ROUTE", "status": "skip", "action": action})
+        yield {"type": "stage", "stage": "ROUTE", "status": "skip", "action": action}
     else:
-        routing = _route(message, situation)
+        yield {"type": "agent", "agent": "orchestrator", "phase": "start"}
+        try:
+            routing = _route(message, situation)
+        except AgentUnavailable as exc:
+            yield from _fail(base_state, lang, trace, "ROUTE", exc)
+            return
         action = routing.get("action")
         if action not in _AGENT_ACTIONS:
-            action = ACTION_ASSESS if interview_done else ACTION_ASK
+            yield from _fail(base_state, lang, trace, "ROUTE",
+                             AgentUnavailable("orchestrator returned no valid action"))
+            return
         rationale_ms = (routing.get("rationale_ms") or "").strip()
-        trace.append({"stage": "ROUTE", "status": "ok" if routing else "fallback",
-                      "action": action})
+        trace.append({"stage": "ROUTE", "status": "ok", "action": action})
+        yield {"type": "agent", "agent": "orchestrator", "phase": "done",
+               "action": action, "rationale_ms": rationale_ms}
 
-    # 4) NARRATE — invoke the matching specialist directly, then gate ----------
+    # 4) NARRATE — stream the matching specialist, then gate -------------------
     if action == ACTION_ESCALATE:
-        message_ms = _safe_invoke_agent(
-            agents.ESCALATION.id, _escalation_prompt(message, rationale_ms))
-        ok, _ = _amount_only_gate(message_ms, applicant) if message_ms else (False, [])
-        if not message_ms or not ok:
-            message_ms = _REFUSAL_MS
-        return _refusal_turn(base_state, lang, message_ms, action=ACTION_ESCALATE,
-                             trace=trace, rationale_ms=rationale_ms)
+        yield {"type": "agent", "agent": "escalation", "phase": "start"}
+        try:
+            message_ms = yield from _stream_agent_text(
+                agents.ESCALATION.id, _escalation_prompt(message, rationale_ms), "escalation")
+        except AgentUnavailable as exc:
+            yield from _fail(base_state, lang, trace, "ESCALATE", exc)
+            return
+        if not message_ms:
+            yield from _fail(base_state, lang, trace, "ESCALATE",
+                             AgentUnavailable("escalation agent returned nothing"))
+            return
+        ok, _ = _amount_only_gate(message_ms, applicant)
+        if not ok:                                # fabricated RM in a hand-off → safety refusal
+            yield {"type": "done",
+                   "turn": _refusal_turn(base_state, lang, _REFUSAL_MS, action=ACTION_REFUSE,
+                                         trace=trace, rationale_ms=rationale_ms)}
+            return
+        yield {"type": "done",
+               "turn": _refusal_turn(base_state, lang, message_ms, action=ACTION_ESCALATE,
+                                     trace=trace, rationale_ms=rationale_ms)}
+        return
 
     if action == ACTION_ASK:
         if need is None:                          # nothing left to ask → assess instead
             action = ACTION_ASSESS
         else:
-            message_ms = _safe_invoke_agent(
-                agents.INTERVIEW.id, _interview_prompt(agent_token, message, situation))
-            ok, _ = _amount_only_gate(message_ms, applicant) if message_ms else (False, [])
-            if not message_ms or not ok:
-                message_ms = _template_question_ms(need)
+            yield {"type": "agent", "agent": "interview", "phase": "start"}
+            try:
+                message_ms = yield from _stream_agent_text(
+                    agents.INTERVIEW.id,
+                    _interview_prompt(agent_token, message, situation), "question")
+            except AgentUnavailable as exc:
+                yield from _fail(base_state, lang, trace, "INTERVIEW", exc)
+                return
+            if not message_ms:
+                yield from _fail(base_state, lang, trace, "INTERVIEW",
+                                 AgentUnavailable("interview agent returned nothing"))
+                return
+            ok, _ = _amount_only_gate(message_ms, applicant)
+            if not ok:                            # a question that fabricated an RM → refuse
+                trace.append({"stage": "GATE", "status": "refused", "scope": "question"})
+                yield {"type": "done",
+                       "turn": _refusal_turn(base_state, lang, _REFUSAL_MS,
+                                             action=ACTION_REFUSE, trace=trace,
+                                             rationale_ms=rationale_ms)}
+                return
             new_asked = asked + [need.field] if need.field not in asked else asked
             new_state = base_state.evolve(asked=tuple(new_asked), turn=state.turn + 1)
             reply, tok_ok = _localize_text(message_ms, lang)
-            return ChatTurn(
+            yield {"type": "done", "turn": ChatTurn(
                 token=encode(new_state), action=ACTION_ASK, reply=reply,
                 reply_ms=message_ms, rationale_ms=rationale_ms,
                 question=trust_tools._need_dict(need),
                 progress=elicit.progress(known, tuple(new_asked)), done=False,
-                turn=state.turn + 1, lang=lang, translation_ok=tok_ok, trace=trace)
+                turn=state.turn + 1, lang=lang, translation_ok=tok_ok, trace=trace)}
+            return
 
-    # action == ASSESS — verdicts in-process (ground truth), Communicator narrates
+    # action == ASSESS — verdicts in-process (ground truth), Communicator narrates.
     assessment = summarise(applicant)
     passages: list[dict] = []
+    # RETRIEVE is the ONE graceful exception to fail-hard: the invariant is that verdicts
+    # never depend on retrieval succeeding, so a knowledge-base hiccup degrades grounding
+    # rather than sinking an assessment whose verdicts are already valid.
     try:
         passages = kb.retrieve_passages(extracted.retrieval_query_ms or message, reasoning="low")
     except Exception as exc:  # noqa: BLE001 — groundedness degrades, verdicts don't
         trace.append({"stage": "RETRIEVE", "status": "error", "detail": str(exc)[:120]})
+        yield {"type": "stage", "stage": "RETRIEVE", "status": "error"}
     else:
         trace.append({"stage": "RETRIEVE", "status": "ok", "passages": len(passages)})
+        yield {"type": "stage", "stage": "RETRIEVE", "status": "ok", "passages": len(passages)}
 
     facts_text = narrate.build_facts_text(assessment)
-    narrative_ms = _safe_invoke_agent(
-        agents.COMMUNICATOR.id, _communicator_prompt(message, facts_text, passages))
+    yield {"type": "agent", "agent": "communicator", "phase": "start"}
+    try:
+        # reveal=False: the narrative is gated (amount + groundedness) BEFORE the user sees
+        # any of it. We stream the Communicator's activity (its grade tool calls), then
+        # reveal the verified text only in the terminal `done` — never an ungated token.
+        narrative_ms = yield from _stream_agent_text(
+            agents.COMMUNICATOR.id, _communicator_prompt(message, facts_text, passages),
+            "narrative", reveal=False)
+    except AgentUnavailable as exc:
+        yield from _fail(base_state, lang, trace, "COMMUNICATOR", exc)
+        return
+    if not narrative_ms:                          # no local degraded narrative — fail-hard
+        yield from _fail(base_state, lang, trace, "COMMUNICATOR",
+                         AgentUnavailable("communicator agent returned nothing"))
+        return
 
-    # Two failure modes are handled differently, on purpose:
-    if narrative_ms:
-        #  - Agent narrative PRESENT → full dual gate (amount + groundedness). A present
-        #    narrative that fails (fabricated amount / ungrounded) is a real trust
-        #    violation → refuse and route to a human (the cite-or-refuse invariant).
-        degraded = False
-        gate_ok, groundedness = _gate(narrative_ms, applicant, assessment, passages)
-    else:
-        #  - Agent UNAVAILABLE (empty / a transient 429) → a fixed, claim-free lead line;
-        #    the verified eligible/near-miss CARDS (straight from compute/) carry every
-        #    figure. There is no LLM prose to ground, so only the amount guard applies
-        #    (the line has no RM → passes). This is what turned the citizen's "Request
-        #    could not be processed" into a correct, cited answer under rate-limiting.
-        degraded = True
-        narrative_ms = _DEGRADED_NARRATIVE_MS
-        amounts_ok, fabricated = _amount_only_gate(narrative_ms, applicant)
-        gate_ok = amounts_ok
-        groundedness = {"available": False, "grounded": True, "ungrounded_percentage": 0.0,
-                        "amounts_ok": amounts_ok, "fabricated_amounts": fabricated}
-
+    # Full dual gate (amount + groundedness). A present narrative that fails (fabricated
+    # amount / ungrounded) is a real trust violation → refuse and route to a human.
+    gate_ok, groundedness = _gate(narrative_ms, applicant, assessment, passages)
     trace.append({"stage": "GATE", "status": "ok" if gate_ok else "refused",
-                  "degraded": degraded, **groundedness})
+                  "degraded": False, **groundedness})
+    yield {"type": "stage", "stage": "GATE", "status": "ok" if gate_ok else "refused",
+           **groundedness}
     if not gate_ok:
-        return _refusal_turn(base_state, lang, _REFUSAL_MS, action=ACTION_REFUSE, trace=trace)
+        yield {"type": "done",
+               "turn": _refusal_turn(base_state, lang, _REFUSAL_MS, action=ACTION_REFUSE,
+                                     trace=trace)}
+        return
 
     # 5) Verified → localize + persist -----------------------------------------
     canonical = _assessment_payload(narrative_ms, applicant, assessment, known)
@@ -495,9 +669,23 @@ def run_chat(message: str, token: Optional[str] = None, lang: str = "en") -> Cha
     new_state = base_state.evolve(
         assessment={"total_monthly_min": assessment.total_monthly_min},
         turn=state.turn + 1)
-    return ChatTurn(
+    yield {"type": "done", "turn": ChatTurn(
         token=encode(new_state), action=ACTION_ASSESS,
         reply=result.get("message_ms", narrative_ms), reply_ms=narrative_ms,
         rationale_ms=rationale_ms, result=result, canonical_ms=canonical,
         citations=canonical["citations"], done=interview_done, turn=state.turn + 1,
-        lang=lang, translation_ok=tok_ok, trace=trace)
+        lang=lang, translation_ok=tok_ok, trace=trace)}
+
+
+def run_chat(message: str, token: Optional[str] = None, lang: str = "en") -> ChatTurn:
+    """Advance the conversation by one turn (non-streaming JSON path). Consumes
+    `run_chat_stream` and returns its terminal ChatTurn, so the streamed `/chat/stream`
+    demo path and this `/chat` path run the IDENTICAL pipeline (and the test suite pins
+    the same code the demo uses)."""
+    turn: Optional[ChatTurn] = None
+    for ev in run_chat_stream(message, token, lang):
+        if ev.get("type") in ("done", "error"):
+            turn = ev["turn"]
+    if turn is None:  # defensive — a stream must always end with a terminal event
+        raise AgentUnavailable("conversation turn produced no result")
+    return turn

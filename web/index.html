@@ -166,6 +166,15 @@
               <span id="inline-error-text"></span>
             </div>
 
+            <!-- Live agent activity — streams the Foundry multi-agent run as it happens:
+                 which agent is working, the trust tools it calls, and the answer forming.
+                 Hidden until a turn is in flight; collapses when the turn's result renders. -->
+            <section id="agent-stream" class="agent-stream hidden" aria-labelledby="agent-stream-title">
+              <h3 id="agent-stream-title" class="agent-stream-title" data-i18n="stream_title">Watch the agents work</h3>
+              <ol id="agent-stream-log" class="agent-stream-log" role="list" aria-live="polite"></ol>
+              <p id="agent-stream-live" class="agent-stream-live" aria-hidden="true"></p>
+            </section>
+
             <!-- Grill: adaptive one-question-at-a-time interview -->
             <div id="grill" class="grill hidden">
               <div id="grill-progress" class="grill-progress" role="status" aria-live="polite"></div>

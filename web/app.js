@@ -38,6 +38,14 @@ const grillTranscriptEl = document.getElementById('grill-transcript');
 const grillCurrentEl   = document.getElementById('grill-current');
 const intakeCard       = document.querySelector('.intake-card');
 
+// Live agent-activity stream (SSE from /chat/stream).
+const agentStreamEl    = document.getElementById('agent-stream');
+const agentStreamLog   = document.getElementById('agent-stream-log');
+const agentStreamLive  = document.getElementById('agent-stream-live');
+// Streaming needs fetch + a readable response body. Older browsers fall back to /chat.
+const STREAM_SUPPORTED = typeof window.ReadableStream !== 'undefined' &&
+  typeof TextDecoder !== 'undefined';
+
 let currentLang        = langSelect ? langSelect.value : 'en';
 let lastAssessmentText = '';            // running conversation text, reused for appeals
 let canonicalMsResult  = null;          // Malay canonical from the last assessment
@@ -765,7 +773,7 @@ btnAssess.addEventListener('click', () => {
   grillActive = true;
   grillCurrent = null; grillTranscript = []; grillLastProgress = null;
   [grillProgressEl, grillPresumedEl, grillTranscriptEl, grillCurrentEl].forEach(clearEl);
-  chatSend(text, { fresh: true });
+  chatTurn(text, { fresh: true });
 });
 
 // One conversation turn: POST the message (+ the carried signed token) and route the
@@ -798,9 +806,159 @@ async function chatSend(message, opts) {
   }
 }
 
+// One turn, preferring the streamed transport so the user watches the Foundry agents
+// work (first output in ~5s) instead of staring at a spinner. Falls back to the JSON
+// /chat endpoint on older browsers or if the stream fails before any result.
+function chatTurn(message, opts) {
+  clearInlineError();   // a new turn supersedes any prior failure banner (it reflects THIS turn)
+  return STREAM_SUPPORTED ? chatSendStream(message, opts) : chatSend(message, opts);
+}
+
+// ----- Live agent stream (SSE from /chat/stream) -------------------------------
+
+function startAgentStream() {
+  clearEl(agentStreamLog);
+  agentStreamLive.textContent = '';
+  agentStreamLive.setAttribute('aria-hidden', 'true');
+  agentStreamEl.classList.remove('hidden');
+}
+
+function hideAgentStream() {
+  agentStreamEl.classList.add('hidden');
+  clearEl(agentStreamLog);
+  agentStreamLive.textContent = '';
+}
+
+// Upsert one row in the activity log (keyed by id so repeated events update one row).
+function streamRow(id, label, state, detail) {
+  let row = agentStreamLog.querySelector('[data-row="' + id + '"]');
+  if (!row) {
+    row = el('li', { class: 'stream-row', role: 'listitem', 'data-row': id });
+    row.appendChild(el('span', { class: 'stream-dot', 'aria-hidden': 'true' }));
+    row.appendChild(el('span', { class: 'stream-label' }));
+    row.appendChild(el('span', { class: 'stream-detail' }));
+    agentStreamLog.appendChild(row);
+  }
+  row.className = 'stream-row is-' + (state || 'run');
+  row.querySelector('.stream-label').textContent = label;
+  row.querySelector('.stream-detail').textContent =
+    detail != null ? detail : (state === 'run' ? t('stream_thinking') : '');
+  return row;
+}
+
+// Translate one stream event into the live activity log / forming-text region. Every
+// row reflects a REAL step: a stage check, an agent running, or an MCP trust-tool call.
+function handleStreamEvent(evt) {
+  switch (evt.type) {
+    case 'stage': {
+      const id = 'st-' + evt.stage;
+      const label = t('trace_' + String(evt.stage || '').toLowerCase());
+      const state = (evt.status === 'error') ? 'err' : 'ok';
+      streamRow(id, label, state, '');
+      break;
+    }
+    case 'agent': {
+      const id = 'ag-' + evt.agent;
+      const label = t('stream_agent_' + evt.agent);
+      if (evt.phase === 'start') {
+        streamRow(id, label, 'run', '');
+        agentStreamLive.textContent = '';                  // its output forms below (visual ticker)
+      } else if (evt.phase === 'done') {
+        // the Orchestrator's done event carries its real one-line routing reasoning
+        streamRow(id, label, 'ok', evt.rationale_ms || '');
+      }
+      break;
+    }
+    case 'tool': {                                          // a real MCP trust-tool call
+      streamRow('tl-' + evt.agent + '-' + evt.tool,
+                '↳ ' + t('stream_tool', { tool: evt.tool }), 'ok', '');
+      break;
+    }
+    case 'reset':
+      agentStreamLive.textContent = '';
+      break;
+    case 'delta':
+      // The agents emit Bahasa Melayu. Show the live typewriter only when the display
+      // language IS Malay; otherwise the Malay draft would form then be replaced by the
+      // localized question (reads as jank). Non-ms users still see the activity log live,
+      // and the localized question/result appears on `done`.
+      if (currentLang === 'ms') agentStreamLive.textContent += (evt.text || '');
+      break;
+    default:
+      break;
+  }
+}
+
+// Stream one turn over SSE. Parses `data:` frames, renders progress live, and hands the
+// terminal done/error event to handleTurn (same shape as /chat). On a pre-result stream
+// failure it falls back to the JSON endpoint once.
+async function chatSendStream(message, opts) {
+  if (grillBusy) return;
+  grillBusy = true;
+  setLoading(true);
+  startAgentStream();
+  let gotTerminal = false;
+  try {
+    const resp = await fetch('/chat/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: message,
+        token: (opts && opts.fresh) ? null : chatToken,
+        lang: currentLang
+      })
+    });
+    if (!resp.ok || !resp.body) throw new Error('stream unavailable (HTTP ' + resp.status + ')');
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let sep;
+      while ((sep = buf.indexOf('\n\n')) >= 0) {
+        const frame = buf.slice(0, sep);
+        buf = buf.slice(sep + 2);
+        const dataLine = frame.split('\n').find(l => l.startsWith('data:'));
+        if (!dataLine) continue;
+        let evt;
+        try { evt = JSON.parse(dataLine.slice(5).trim()); } catch (e) { continue; }
+        if (evt.type === 'done' || evt.type === 'error') {
+          gotTerminal = true;
+          hideAgentStream();
+          handleTurn(evt);
+        } else {
+          handleStreamEvent(evt);
+        }
+      }
+    }
+    if (!gotTerminal) throw new Error('stream ended without a result');
+  } catch (err) {
+    hideAgentStream();
+    if (!gotTerminal) {                       // never got a result → try the JSON path once
+      grillBusy = false;                      // release the lock so chatSend can run
+      await chatSend(message, opts);
+      return;
+    }
+    showInlineError(t('err_connection') + ' (' + (err.message || '') + ')');
+  } finally {
+    grillBusy = false;
+    setLoading(false);
+  }
+}
+
 // Route one /chat turn: ask → next question; assess → verified results; escalate /
-// refuse → a calm hand-off to a human. The verdict gate already ran server-side.
+// refuse → a calm hand-off to a human; error → a Foundry agent was unreachable
+// (fail-hard: no local answer, offer a retry). The verdict gate already ran server-side.
 function handleTurn(turn) {
+  hideAgentStream();
+  if (turn.action === 'error' || turn.type === 'error') {
+    grillActive = false;
+    showInlineError(t('stream_error'));
+    announce(t('stream_error'));
+    return;
+  }
   chatToken = turn.token || chatToken;
 
   if (turn.action === 'ask' && turn.question) {
@@ -856,7 +1014,7 @@ function answerCurrent(payload) {
   }
   grillTranscript = grillTranscript.concat([row]);
   lastAssessmentText += ' ' + message;                         // grow conversation text (appeals)
-  chatSend(message, {});
+  chatTurn(message, {});
 }
 
 // Map the /chat trace ([{stage,status,…}]) into the "How we checked" panel's shape.
