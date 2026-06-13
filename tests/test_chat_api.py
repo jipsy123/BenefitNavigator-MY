@@ -445,3 +445,21 @@ def test_chat_assess_fails_hard_when_retrieval_agent_skips_the_tool(monkeypatch)
     body = resp.json()
     assert resp.status_code == 200 and body["action"] == "error"
     assert any(s["stage"] == "RETRIEVE" and s["status"] == "error" for s in body["trace"])
+
+
+def test_chat_assess_fails_hard_when_retrieval_agent_unavailable(monkeypatch):
+    # The Retrieval agent is unavailable (its stream raises mid-run). Foundry-or-fail: the
+    # turn fails (action="error"), exercising the ASSESS branch's `except AgentUnavailable`.
+    def fake(agent_id, _prompt):
+        if agent_id == agents.ORCHESTRATOR.id:
+            yield ("final", '{"action": "assess", "rationale_ms": "sebab"}')
+            return
+        if agent_id == agents.RETRIEVAL.id:
+            raise orchestrate.AgentUnavailable("retrieval down")
+        yield ("final", "Anda layak menerima bantuan.")
+    monkeypatch.setattr(orchestrate, "_invoke_agent_stream", fake)
+    resp = client.post("/chat", json={"message": "tolong nilai sekarang",
+                                      "token": _token(_OKU_FACTS), "lang": "ms"})
+    body = resp.json()
+    assert resp.status_code == 200 and body["action"] == "error"
+    assert any(s["stage"] == "RETRIEVE" and s["status"] == "error" for s in body["trace"])

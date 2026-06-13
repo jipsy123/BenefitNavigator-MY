@@ -103,8 +103,10 @@ def grade(text: str) -> dict:
 )
 def retrieve(query_ms: str) -> dict:
     """Grounding retrieval over the gazetted .gov.my corpus. Fail-hard: a knowledge-base
-    error propagates as a tool error so the calling agent's run reflects the failure and the
-    conductor ends the turn — there is no silent empty-grounding fallback."""
+    error is raised here, never swallowed. Downstream this ends the turn one of two ways —
+    either the agent run itself fails (the conductor sees AgentUnavailable) or the agent
+    returns no usable passages (the conductor hard-fails on `passages is None`). Either way
+    the assess turn ends as action="error"; there is no silent empty-grounding fallback."""
     return {"passages": kb.retrieve_passages(query_ms, reasoning="low")}
 
 
