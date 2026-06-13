@@ -28,14 +28,12 @@ MODEL = config.AOAI_CHAT_DEPLOYMENT          # "gpt-4o"
 
 # Tool kinds the provisioner knows how to attach.
 TOOL_MCP = "mcp"                 # a function on the trust-core MCP server
-TOOL_A2A = "a2a"                 # an outbound A2A connection to another agent
-TOOL_KB = "knowledge_base"       # the existing Foundry IQ / Azure AI Search retrieval
 
 
 @dataclass(frozen=True)
 class ToolSpec:
-    kind: str            # TOOL_MCP | TOOL_A2A | TOOL_KB
-    name: str            # MCP function name, target agent id, or knowledge source id
+    kind: str            # TOOL_MCP
+    name: str            # MCP function name
 
 
 @dataclass(frozen=True)

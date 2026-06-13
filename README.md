@@ -28,7 +28,7 @@ A benefits assistant that can *hallucinate an entitlement* is worse than no assi
 
 ## Architecture
 
-BenefitNavigator is a **multi-agent system on Azure AI Foundry** conducted by a FastAPI service. Six gpt-4o agents own the *language and flow* of the conversation; a deterministic trust core — reachable only through an MCP server — owns the *truth*.
+BenefitNavigator is a **multi-agent system on Azure AI Foundry** conducted by a FastAPI service. Five gpt-4o agents own the *language and flow* of the conversation; a deterministic trust core — reachable only through an MCP server — owns the *truth*.
 
 ```mermaid
 flowchart TB
@@ -46,12 +46,12 @@ flowchart TB
         end
     end
 
-    subgraph FOUNDRY["🧠 Azure AI Foundry — Agent Service · 6× gpt-4o"]
+    subgraph FOUNDRY["🧠 Azure AI Foundry — Agent Service · 5× gpt-4o"]
         ROUTER["Orchestrator · router<br/>ask / assess / escalate"]
         INT["Interview"]
         COMM["Communicator"]
         ESC["Escalation"]
-        ASSRET["Assessor · Retrieval<br/>(roles run in-process — see note)"]
+        RET["Retrieval<br/>(calls retrieve)"]
     end
 
     subgraph MCP["🛠️ Trust-core MCP server — Container App: benefitnav-mcp"]
@@ -76,10 +76,10 @@ flowchart TB
     ORCH -->|"③ escalate"| ESC
     ORCH -->|"④ verdicts in-process"| COMPUTE
     COMPUTE --- TH
-    ORCH -->|"⑤ retrieve passages in-process"| SEARCH
+    ORCH -->|"⑤ Retrieval agent → retrieve"| RET
+    RET -.->|"retrieve"| TOOLS
     INT -.->|"grill_next · HMAC token"| TOOLS
     COMM -.->|"grade"| TOOLS
-    ASSRET -.-> TOOLS
     TOOLS --> COMPUTE
     TOOLS -.-> SEARCH
     SEARCH --- EMB
@@ -97,7 +97,7 @@ flowchart TB
 
 A deeper view — the two diagrams plus the per-turn sequence — is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
-### The six Foundry agents
+### The five Foundry agents
 
 | Agent | Role | MCP tools | On the live `/chat` turn |
 |---|---|---|---|
@@ -105,10 +105,9 @@ A deeper view — the two diagrams plus the per-turn sequence — is in [`docs/A
 | **Interview** | Asks the single most decision-relevant question next, phrased warmly. It never *chooses* the field — `grill_next` does. | `grill_next` | ✓ on **ask** |
 | **Communicator** | Explains the verdict in plain Bahasa Melayu and drafts appeal letters — strictly from the supplied verdicts. | `grade` | ✓ on **assess** |
 | **Escalation** | Hands off to a human (Talian Kasih 15999, district JKM/LHDN) without a dead-end. | *(none)* | ✓ on **escalate** |
-| **Assessor** | Relays the deterministic verdict + optimal-unlock plan verbatim. | `assess`, `optimize` | role run **in-process**\* |
-| **Retrieval** | Returns cited `.gov.my` passages — grounding only, never a verdict. | `retrieve` | role run **in-process**\* |
+| **Retrieval** | Formulates a Malay search query and calls `retrieve` to ground the narrative in cited `.gov.my` passages (the conductor uses the tool's deterministic output). | `retrieve` | live agent |
 
-\* **"FastAPI conducts, agents execute" (Option 1).** Same-project Foundry→Foundry A2A delegation is currently an open platform bug ([azure-sdk-for-python #47419](https://github.com/Azure/azure-sdk-for-python/issues/47419)), so the Orchestrator is a *tool-less router*: it returns a decision and the conductor invokes the chosen specialist directly via the Responses API. For the same reason — and because the **dual gate must own the trust-critical values** rather than round-trip them through an LLM — the conductor performs the Assessor and Retrieval *roles* in-process (`compute.summarise()`, `kb.retrieve_passages()`). Those two agents and their MCP tools stay provisioned and callable, and the **same trust-core functions back both paths**, so the deterministic guarantee is identical either way.
+\* **"FastAPI conducts, agents execute" (Option 1).** Same-project Foundry→Foundry A2A delegation is an open platform bug ([azure-sdk-for-python #47419](https://github.com/Azure/azure-sdk-for-python/issues/47419)), so the Orchestrator is a *tool-less router*: it returns a decision and the conductor invokes the chosen specialist directly via the Responses API. Verdicts are computed in-process (`compute.summarise`) because the **dual gate must own the trust-critical values** rather than round-trip them through an LLM — so there is no Assessor agent; the `assess`/`optimize` MCP tools remain as latent, unit-tested trust-core surface. Retrieval IS a live agent: it formulates the query and calls `retrieve`, and the conductor captures the tool's deterministic output.
 
 ### One turn, end to end
 
@@ -149,7 +148,7 @@ sequenceDiagram
     API-->>C: verified reply (localized) + canonical_ms + new token
 ```
 
-**Resilience by design.** Every external dependency degrades closed, never silent: a Prompt-Shield/intake/agent failure (e.g. a transient 429) falls back to a deterministic action and a claim-free template, and `RETRIEVE` is best-effort — **verdicts never depend on retrieval or on any LLM call succeeding**. A *present but unverifiable* narrative still refuses (cite-or-refuse), but a *missing* one degrades to the trust core's own verified summary, so the citizen gets a correct, cited answer instead of an error.
+**Fail-hard by design.** Every external dependency fails closed, never silent: if an agent is unavailable (after retries) or returns an unusable result, the turn fails with `action="error"` — the conductor never substitutes locally for an agent's job. Verdicts are COMPUTED independently of retrieval (`compute.summarise` runs first), but the assess turn cannot COMPLETE without the Retrieval agent. A *present but unverifiable* narrative still refuses (cite-or-refuse); a fabricated `RM` figure trips the amount guard precisely.
 
 ### Language model
 
@@ -161,7 +160,7 @@ The pipeline reasons and verifies entirely in **Bahasa Melayu**. Every response 
 
 | Layer | Service | Role |
 |---|---|---|
-| Agents | **Azure AI Foundry — Agent Service** (6× gpt-4o) | the multi-agent reasoning layer: route, interview, narrate, escalate, assess, retrieve |
+| Agents | **Azure AI Foundry — Agent Service** (5× gpt-4o) | the multi-agent reasoning layer: route, interview, narrate, escalate, retrieve |
 | Conductor | **Azure Container Apps** — `benefitnav-api` | FastAPI: per-turn orchestration + the non-bypassable dual gate + the UI |
 | Trust tools | **Azure Container Apps** — `benefitnav-mcp` | the MCP server exposing the deterministic core (5 tools) to the agents |
 | Knowledge (IQ) | **Azure AI Search** (Basic) + Foundry IQ knowledge base | agentic retrieval, hybrid + semantic rerank, extractive citations |
@@ -226,7 +225,7 @@ PYTHONPATH="$PWD" .venv/bin/python -m ingest.kb_smoke      # Step B: agentic ret
 ### (Re)provision the Foundry agents
 ```bash
 BENEFITNAV_MCP_URL="https://benefitnav-mcp.ashyocean-f47e8ddf.swedencentral.azurecontainerapps.io/mcp" \
-  PYTHONPATH="$PWD" .venv/bin/python -m mas.provision      # idempotent; creates the 6 agents + MCP tools
+  PYTHONPATH="$PWD" .venv/bin/python -m mas.provision      # idempotent; creates the 5 agents + MCP tools
 ```
 
 ---
@@ -268,7 +267,7 @@ benefitnav/
 │   ├── status.py    eligible + GAP/near-miss analysis
 │   └── elicit.py    Kleene three-valued grill engine (deterministic next-question)
 ├── mas/             the multi-agent layer (Foundry + MCP)
-│   ├── agents.py    the 6 agent definitions (instructions + tools) — pure data
+│   ├── agents.py    the 5 agent definitions (instructions + tools) — pure data
 │   ├── provision.py creates the agents in Foundry Agent Service
 │   ├── mcp_server.py  the trust-core MCP server (5 tools) — benefitnav-mcp
 │   ├── trust_tools.py  the tool implementations over compute/
@@ -312,7 +311,7 @@ bash infra/teardown.sh
 - **PGK is the one configurable value.** Every threshold is concrete from the corpus *except* the poverty line (PGK), which the gazetted JKM guideline references as "PGK semasa" without a fixed figure (it updates annually). It lives in `thresholds.json` as an agency-set reference value with an explicit note — not dressed up as fact.
 - **MVP scope:** JKM disability (BTB/EPC/BPT/BOT) + LHDN STR/SARA are in the deterministic checker. PERKESO RTW and housing (KPKM) are in the corpus for retrieval but not yet in the checker — adding a programme is a `thresholds.json` edit, not code.
 - **"FastAPI conducts, agents execute."** Same-project Foundry→Foundry A2A delegation is an open platform bug, so the delegation hop lives in the conductor rather than in a single Orchestrator-over-A2A call (see the [Architecture](#architecture) note). Genuine multi-agent on Foundry; only the network hop moved.
-- **gpt-4o quota.** The deployment is small (Standard, 50K TPM). Rapid back-to-back turns can 429 the shared deployment — which degrades to the verified deterministic summary, never an error. A real demo (one call per turn) is comfortable.
+- **gpt-4o quota.** The deployment is small (Standard, 50K TPM). Rapid back-to-back turns can 429 the shared deployment — the conductor retries once, then fails the turn hard (`action="error"`). A real demo (one call per turn) is comfortable.
 - **Synthetic PII only.** Never enter a real MyKad/NRIC; the system uses placeholders and never persists identifiers.
 - **i18n translates the explanation, not the chrome.** The generated narrative is translated to EN / 中文 / Tamil on demand; the UI labels are Malay-first (this is a Malay-first service for Malaysians).
 - **No data-residency claim.** gpt-4o runs on Azure GlobalStandard routing (quota reality on the trial subscription), so there is no in-Malaysia residency story.

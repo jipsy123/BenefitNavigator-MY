@@ -1,4 +1,4 @@
-"""Provision the six Foundry agents + their MCP tools (idempotent).
+"""Provision the five Foundry agents + their MCP tools (idempotent).
 
 Run (with the trust-core MCP server reachable at BENEFITNAV_MCP_URL — the Azure
 Container Apps endpoint + /mcp):

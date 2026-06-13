@@ -57,5 +57,5 @@ Toggle the **language selector to English / 中文 / தமிழ்**:
 
 ## If asked
 - **"Where do the numbers come from?"** Every threshold is concrete from the gazetted corpus, except the poverty line (PGK) which the source itself references as "current" — so it's an explicit agency-configured value, not a guess.
-- **"What if retrieval fails?"** The deterministic verdicts don't depend on it; the pipeline degrades gracefully and still answers from the rules.
+- **"What if retrieval fails?"** Verdicts are computed independently of retrieval (`compute.summarise` runs first), but under fail-hard, the assess turn ends with `action="error"` if the Retrieval agent is unavailable — we don't substitute a locally-fetched answer. The deterministic verdict cards still reach the citizen as part of the error context.
 - **"Latency?"** ~10–20s per assessment (agentic retrieval + groundedness check). The trust guarantees are worth the seconds.

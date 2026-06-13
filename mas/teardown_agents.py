@@ -1,4 +1,4 @@
-"""Delete the six Foundry agents from the project (data-plane).
+"""Delete the five Foundry agents from the project (data-plane).
 
 This is OPTIONAL for a full teardown: infra/teardown.sh removes the whole resource
 group, which destroys the Cognitive Services account → the Foundry project → every

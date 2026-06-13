@@ -1,5 +1,10 @@
 # Architecture — BenefitNavigator Malaysia
 
+> **Diagrams pending regeneration (2026-06-13):** the PNGs in `docs/diagrams/` still show the
+> pre-change topology (6 agents; Assessor + Retrieval in-process). After this change: 5 agents,
+> Retrieval is a live agent calling `retrieve`, and there is no Assessor agent. Regenerate from
+> the mermaid sources above before publishing.
+
 A **multi-agent reasoning system on Azure AI Foundry**, conducted by a FastAPI service, with a deterministic trust core that the agents can reach **only** through an MCP server. The design separates the two things LLMs are good and bad at, and makes the separation *structural*: no agent can decide eligibility or state an amount, because the conductor recomputes the verdicts and a non-bypassable gate refuses anything that doesn't match.
 
 This document expands on the overview in [`../README.md`](../README.md) with three views: the **component diagram**, the **per-turn sequence**, and the **deployment / trust boundary**. The Mermaid sources below render on GitHub; pre-rendered PNGs are in [`diagrams/`](diagrams/) for slides and the submission form.
@@ -8,7 +13,7 @@ This document expands on the overview in [`../README.md`](../README.md) with thr
 
 ## 1. Component diagram
 
-Six gpt-4o agents own the conversation's *language and flow*; `compute/` owns its *truth*.
+Five gpt-4o agents own the conversation's *language and flow*; `compute/` owns its *truth*.
 
 ```mermaid
 flowchart TB
@@ -26,16 +31,16 @@ flowchart TB
         end
     end
 
-    subgraph FOUNDRY["🧠 Azure AI Foundry — Agent Service · 6× gpt-4o"]
+    subgraph FOUNDRY["🧠 Azure AI Foundry — Agent Service · 5× gpt-4o"]
         ROUTER["Orchestrator · router<br/>ask / assess / escalate"]
         INT["Interview"]
         COMM["Communicator"]
         ESC["Escalation"]
-        ASSRET["Assessor · Retrieval<br/>(roles run in-process — see §4)"]
+        RET["Retrieval<br/>(live agent · calls retrieve)"]
     end
 
     subgraph MCP["🛠️ Trust-core MCP server — Container App: benefitnav-mcp"]
-        TOOLS["5 tools · assess · optimize · grill_next · grade · retrieve"]
+        TOOLS["5 tools · grill_next · grade · retrieve (live) · assess · optimize (latent)"]
     end
 
     subgraph KNOW["📚 Knowledge — Foundry IQ"]
@@ -56,10 +61,10 @@ flowchart TB
     ORCH -->|"③ escalate"| ESC
     ORCH -->|"④ verdicts in-process"| COMPUTE
     COMPUTE --- TH
-    ORCH -->|"⑤ retrieve passages in-process"| SEARCH
+    ORCH -->|"⑤ Retrieval agent → retrieve"| RET
+    RET -.->|"retrieve"| TOOLS
     INT -.->|"grill_next · HMAC token"| TOOLS
     COMM -.->|"grade"| TOOLS
-    ASSRET -.-> TOOLS
     TOOLS --> COMPUTE
     TOOLS -.-> SEARCH
     SEARCH --- EMB
@@ -81,7 +86,7 @@ flowchart TB
 | ② | **ROUTE** — pick ask / assess / escalate | Orchestrator agent |
 | ③ | **NARRATE** — phrase the question / explanation / hand-off | Interview · Communicator · Escalation |
 | ④ | Recompute verdicts + amounts as ground truth | `compute.summarise` (in-process) |
-| ⑤ | Retrieve cited `.gov.my` passages for grounding | Foundry IQ / AI Search (in-process) |
+| ⑤ | Retrieve cited `.gov.my` passages for grounding | Retrieval agent → `retrieve` tool |
 | ⑥ | **DUAL GATE** every narrative → refuse or emit | `verify` + Content Safety |
 
 ---
@@ -143,7 +148,7 @@ flowchart LR
             MCPC["benefitnav-mcp<br/>trust-core MCP server · 5 tools"]
         end
         subgraph AISVC["AIServices · benefitnav-ai-sc-79c45"]
-            AGENTS["Foundry Agent Service · 6× gpt-4o"]
+            AGENTS["Foundry Agent Service · 5× gpt-4o"]
             CS["Content Safety<br/>Prompt Shields + Groundedness"]
             EMB["text-embedding-3-large"]
         end
@@ -174,14 +179,13 @@ The intended Foundry topology is an Orchestrator agent that delegates to special
 
 So the delegation hop moved into the conductor. The Orchestrator is a **tool-less router** — it still owns the LLM judgment that matters (ask vs assess vs escalate) — and FastAPI invokes the chosen specialist directly via the Responses API (the path proven in `mas/orchestrate._invoke_agent`). The system stays genuinely multi-agent on Foundry; only the network hop changed.
 
-Two specialists' **roles run in-process** in the conductor:
+The **assessment role runs in-process** (no dedicated agent):
 
-| Role | Hosted agent (provisioned) | What the conductor runs | Why in-process |
+| Role | Hosted agent | What the conductor runs | Why in-process |
 |---|---|---|---|
-| Assessor | `assessor` → `assess`, `optimize` | `compute.summarise(applicant)` | the **dual gate must own the verdict values** it checks the narrative against — round-tripping them through an LLM would put a trust-critical value on the wrong side of the gate |
-| Retrieval | `retrieval` → `retrieve` | `kb.retrieve_passages(query)` | the gate grounds the narrative against the *same* passages, so the conductor fetches them directly |
+| Assessment | (no agent — removed) | `compute.summarise(applicant)` | the **dual gate must own the verdict values** it checks the narrative against |
 
-Both hosted agents and their MCP tools remain provisioned and callable, and the **same trust-core functions** (`compute.summarise`, `kb.retrieve_passages`) back both the in-process path and the MCP tools — so the deterministic guarantee is identical whichever way they're reached.
+The `assess`/`optimize` MCP tools remain as latent, unit-tested trust-core surface — callable but unattached to any live agent. Retrieval IS a live agent: the conductor invokes the Retrieval agent on the critical path, it formulates the Malay query and calls `retrieve`, and the conductor captures the tool's deterministic output. If the Retrieval agent is unavailable, the assess turn fails hard (`action="error"`).
 
 ---
 
@@ -195,6 +199,6 @@ Every agent narrative passes two checks in FastAPI before the citizen sees it (`
 If either trips, the turn **refuses and routes to a human** (Talian Kasih 15999). Two failure modes are handled differently on purpose:
 
 - A narrative that is **present but unverifiable** (fabricated amount / ungrounded) is a real trust violation → **refuse**.
-- A **missing** narrative (e.g. the Communicator 429s) → degrade to the trust core's own claim-free summary; the verified eligible/near-miss cards from `compute/` carry every figure and citation, so the citizen still gets a correct, cited answer.
+- A **missing** narrative (e.g. the Communicator 429s after retries) fails the turn hard (`action="error"`) — there is no locally-synthesised substitute.
 
-The deterministic verdicts never depend on the LLM or on retrieval succeeding — `RETRIEVE` is best-effort and wrapped in try/except, and `COMPUTE`/`GAP` run regardless.
+Verdicts are computed independently of the LLM and retrieval (`COMPUTE`/`GAP` run first), but per Foundry-or-fail the Retrieval agent is on the critical path — a turn cannot complete if it is unavailable.

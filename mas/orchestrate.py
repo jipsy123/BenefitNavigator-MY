@@ -24,22 +24,21 @@ the explanation, the hand-off). The trust spine here decides *truth*:
   - Verdicts and amounts are recomputed in-process via ``compute.status.summarise``.
     This is the ground truth handed to the Communicator AND the ground truth the gate
     checks its narrative against — the agent's *relayed* amounts are never trusted.
-    (FastAPI computing verdicts in-process IS the Assessor role under Option 1; the
-    hosted Assessor/Retrieval agents and their MCP tools stay live and are exercised by
-    the probe — but the gate must own these values, so the conductor fetches them here
-    rather than round-tripping trust inputs through the LLM.)
+    (FastAPI computing verdicts in-process IS the assessment role; there is no separate
+    Assessor agent — the dual gate must own these values, so the conductor computes them
+    here rather than round-tripping a trust-critical number through an LLM. The `assess`/
+    `optimize` MCP tools remain as latent trust-core surface, callable but unattached.)
   - The amount guard (``verify.verify_amounts``) runs on EVERY agent message,
     regardless of action, so a fabricated RM can never pass.
   - Groundedness (Azure Content Safety) runs on assessment narratives.
   - Any gate failure ⇒ refuse and route to a human (Talian Kasih 15999).
 
-FAIL-HARD (Foundry-or-fail). This is a deliberate product decision: the system must
-genuinely use the Foundry multi-agent layer, so there is NO local substitute for an
-agent's job. If the Orchestrator, Interview, Communicator, or Escalation agent is
-unavailable (after one retry) or returns an unusable result, the turn FAILS with an
-`error` action — we never phrase a question, route, or narrate locally in its place.
-The one survivor is grounding RETRIEVE (kept in try/except), because the trust core's
-invariant is that verdicts never depend on retrieval succeeding.
+FAIL-HARD (Foundry-or-fail). The system must genuinely use the Foundry multi-agent layer,
+so there is NO local substitute for an agent's job. If the Orchestrator, Interview,
+Retrieval, Communicator, or Escalation agent is unavailable (after retries) or returns an
+unusable result, the turn FAILS with an `error` action — we never route, ground, phrase, or
+narrate locally in its place. Retrieval is on the critical path: verdicts are still COMPUTED
+independently of it (`summarise` runs first), but a turn cannot COMPLETE without it.
 
 What is NOT a "local fallback" and therefore stays: the deterministic trust core
 (`compute/`, reached by agents as MCP tools), the independent in-process verdict
