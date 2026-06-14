@@ -1,4 +1,4 @@
-# BenefitNavigator Malaysia 🇲🇾
+# Benedet
 
 **Find the government benefits you're actually entitled to — explained in plain language, with every claim traceable to a gazetted source, and a safety net that refuses to guess.**
 
