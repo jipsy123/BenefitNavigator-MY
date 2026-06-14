@@ -25,8 +25,8 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."   # -> benefitnav/
 TAG="$(git rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)"
 IMAGE="${ACR}.azurecr.io/${APP}:${TAG}"
 
-echo "==> [1/6] Building $IMAGE via ACR cloud build (verifies Dockerfile.api)"
-az acr build -r "$ACR" -t "${APP}:${TAG}" -f Dockerfile.api .
+echo "==> [1/6] Building $IMAGE via ACR cloud build (verifies infra/Dockerfile.api)"
+az acr build -r "$ACR" -t "${APP}:${TAG}" -f infra/Dockerfile.api .
 
 echo "==> [2/6] Reading runtime secrets from Azure (values never printed)"
 AOAI_KEY="$(az cognitiveservices account keys list -g "$RG" -n "$AOAI_ACCOUNT" --query key1 -o tsv)"

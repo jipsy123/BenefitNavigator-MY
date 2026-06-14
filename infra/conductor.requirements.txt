@@ -1,4 +1,4 @@
-# Runtime dependencies for the conductor image (Dockerfile.api → api.app:app).
+# Runtime dependencies for the conductor image (infra/Dockerfile.api → api.app:app).
 # Pinned to the versions proven in the dev .venv on 2026-06-12. The `mcp` package is
 # intentionally ABSENT: importing api.app pulls in no mcp/azure SDK at load time, and
 # the conductor never serves MCP tools (that is the separate benefitnav-mcp app).
