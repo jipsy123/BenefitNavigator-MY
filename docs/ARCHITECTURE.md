@@ -4,78 +4,13 @@
 
 A **multi-agent reasoning system on Azure AI Foundry**, conducted by a FastAPI service, with a deterministic trust core that the agents can reach **only** through an MCP server. The design separates the two things LLMs are good and bad at, and makes the separation *structural*: no agent can decide eligibility or state an amount, because the conductor recomputes the verdicts and a non-bypassable gate refuses anything that doesn't match.
 
-The diagram above is the one-page view of **how the solution uses Microsoft Foundry** — begin at **① the citizen** (top-left) and follow the numbered path: the conductor routes the turn, the five gpt-4o agents in **Azure AI Foundry** do the language work, every fact is fetched through the **MCP trust core**, and the grounding corpus lives in **Foundry IQ**. The sections below expand each layer with Mermaid sources that render on GitHub — the **component diagram**, the **per-turn sequence**, and the **deployment / trust boundary**. Pre-rendered PNGs of the Foundry overview and the per-turn sequence are in [`diagrams/`](diagrams/) for slides and the submission form.
+This document carries **two diagrams** — the **system overview** above and the **per-turn sequence** in §2 (both are in [`diagrams/`](diagrams/) as PNGs, so they render in slides and the submission form as well as on GitHub). The deployment topology and the trust boundary are described in prose in §3.
 
 ---
 
-## 1. Component diagram
+## 1. System overview
 
-Five gpt-4o agents own the conversation's *language and flow*; `compute/` owns its *truth*.
-
-```mermaid
-flowchart TB
-    subgraph CLIENT["🌐 Citizen"]
-        UI["Accessible single-page UI · web/<br/>Malay-first · ARIA · 4 languages"]
-    end
-
-    subgraph CONDUCTOR["⚙️ Conductor — Container App: benefitnav-api · FastAPI"]
-        API["POST /chat · /appeal · /localize<br/>api/app.py"]
-        ORCH["orchestrate.run_chat — per-turn driver<br/>'FastAPI conducts, agents execute'"]
-        GATE{{"DUAL SAFETY GATE — non-bypassable<br/>1 · amount guard (verify_amounts)<br/>2 · Content Safety groundedness<br/>fail ⇒ refuse → Talian Kasih 15999"}}
-        subgraph CORE["🔒 Deterministic trust core · no LLM"]
-            COMPUTE["compute.summarise<br/>checker · status · elicit"]
-            TH[("thresholds.json<br/>cited, gazetted rules")]
-        end
-    end
-
-    subgraph FOUNDRY["🧠 Azure AI Foundry — Agent Service · 5× gpt-4o"]
-        ROUTER["Orchestrator · router<br/>ask / assess / escalate"]
-        INT["Interview"]
-        COMM["Communicator"]
-        ESC["Escalation"]
-        RET["Retrieval<br/>(live agent · calls retrieve)"]
-    end
-
-    subgraph MCP["🛠️ Trust-core MCP server — Container App: benefitnav-mcp"]
-        TOOLS["5 tools · grill_next · grade · retrieve (live) · assess · optimize (latent)"]
-    end
-
-    subgraph KNOW["📚 Knowledge — Foundry IQ"]
-        SEARCH["Azure AI Search · Basic<br/>index benefitnav-corpus<br/>hybrid BM25 + vector + semantic rerank"]
-        EMB["text-embedding-3-large · 3072-d"]
-        BLOB[("Blob Storage<br/>6 gazetted .gov.my docs")]
-    end
-
-    SAFETY["Azure AI Content Safety<br/>Prompt Shields + Groundedness"]
-    TRANS["Azure AI Translator<br/>BM ↔ EN · 中文 · தமிழ்"]
-
-    UI -->|"signed state token"| API
-    API --> ORCH
-    ORCH -->|"① shield input"| SAFETY
-    ORCH -->|"② ROUTE"| ROUTER
-    ORCH -->|"③ ask"| INT
-    ORCH -->|"③ assess"| COMM
-    ORCH -->|"③ escalate"| ESC
-    ORCH -->|"④ verdicts in-process"| COMPUTE
-    COMPUTE --- TH
-    ORCH -->|"⑤ Retrieval agent → retrieve"| RET
-    RET -.->|"retrieve"| TOOLS
-    INT -.->|"grill_next · HMAC token"| TOOLS
-    COMM -.->|"grade"| TOOLS
-    TOOLS --> COMPUTE
-    TOOLS -.-> SEARCH
-    SEARCH --- EMB
-    SEARCH --- BLOB
-    ORCH -->|"⑥ gate every narrative"| GATE
-    GATE --> SAFETY
-    GATE -->|"verified"| TRANS
-    TRANS -->|"localized reply + canonical_ms"| UI
-
-    classDef trust fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
-    classDef gate fill:#fff3e0,stroke:#e65100,stroke-width:2px;
-    class CORE,COMPUTE,TH trust;
-    class GATE gate;
-```
+The diagram above is the one-page view of **how the solution uses Microsoft Foundry**: begin at **① the citizen** (top-left) and follow the numbered path. The conductor routes the turn, the five gpt-4o agents in **Azure AI Foundry** do the language work, every fact is fetched through the **MCP trust core**, and the grounding corpus lives in **Foundry IQ**. Five gpt-4o agents own the conversation's *language and flow*; `compute/` owns its *truth*.
 
 | # | Step | Who |
 |---|---|---|
@@ -86,89 +21,35 @@ flowchart TB
 | ⑤ | Retrieve cited `.gov.my` passages for grounding | Retrieval agent → `retrieve` tool |
 | ⑥ | **DUAL GATE** every narrative → refuse or emit | `verify` + Content Safety |
 
+The layers the numbered path crosses:
+
+- **Conductor** — Container App `benefitnav-api` (FastAPI). `orchestrate.run_chat` is the per-turn driver — "FastAPI conducts, agents execute." It holds the **dual safety gate** (amount guard + Content Safety groundedness; fail ⇒ refuse → Talian Kasih 15999) and the **deterministic trust core** (`compute.summarise` over `checker · status · elicit`, reading the cited, gazetted `thresholds.json`). No LLM touches the trust core.
+- **Azure AI Foundry — Agent Service · 5× gpt-4o** — the Orchestrator (a tool-less router: ask / assess / escalate) plus four specialists: Interview, Communicator, Escalation, and Retrieval (the live agent that calls `retrieve`).
+- **Trust-core MCP server** — Container App `benefitnav-mcp`, exposing 5 tools: `grill_next`, `grade`, `retrieve` (live) and `assess`, `optimize` (latent).
+- **Knowledge — Foundry IQ** — Azure AI Search (Basic) over the `benefitnav-corpus` index (hybrid BM25 + vector + semantic rerank), `text-embedding-3-large` (3072-d), and Blob Storage holding the 6 gazetted `.gov.my` documents.
+- **Cross-cutting** — Azure AI Content Safety (Prompt Shields + Groundedness) and Azure AI Translator (BM ↔ EN · 中文 · தமிழ்).
+
 ---
 
 ## 2. Per-turn sequence
 
-The citizen's facts live *inside* an HMAC-signed state token. An agent can relay the token but cannot alter the facts in it — so even a compromised agent cannot smuggle in a false fact.
+![Per-turn sequence — the citizen's POST /chat travels through the conductor, Content Safety, the Orchestrator, a specialist, the MCP trust core, and Foundry IQ, then back out through the dual gate.](diagrams/benefitnav-architecture-sequence.png)
 
-```mermaid
-sequenceDiagram
-    actor C as Citizen
-    participant API as Conductor · benefitnav-api
-    participant CS as Content Safety
-    participant O as Orchestrator agent
-    participant S as Specialist agent
-    participant RET as Retrieval agent
-    participant MCP as MCP trust core · benefitnav-mcp
-    participant K as Foundry IQ · AI Search
-
-    C->>API: POST /chat {message, token, lang}
-    API->>CS: Prompt Shield — injection?
-    CS-->>API: clean
-    API->>API: intake — extract stated facts (never invent)
-    API->>O: ROUTE — ask / assess / escalate?
-    O-->>API: {action}
-    alt action = ask
-        API->>S: Interview — phrase the next question
-        S->>MCP: grill_next(state_token)
-        MCP-->>S: most decision-relevant field
-        S-->>API: warm Malay question
-    else action = assess
-        API->>API: compute.summarise() — verdicts + amounts (ground truth)
-        API->>RET: invoke Retrieval agent (fail-hard)
-        RET->>MCP: retrieve(query_ms)
-        MCP->>K: search gazetted .gov.my corpus
-        K-->>MCP: cited passages
-        MCP-->>RET: cited passages
-        RET-->>API: passages (deterministic tool output)
-        API->>S: Communicator — narrate from verdicts only
-        S-->>API: plain-Malay draft
-    else action = escalate
-        API->>S: Escalation — hand off to a human
-        S-->>API: Talian Kasih + district office
-    end
-    API->>API: DUAL GATE — amount guard + groundedness
-    Note over API: fabricated RM or ungrounded ⇒ refuse → Talian Kasih 15999
-    API->>CS: groundedness(narrative, verdicts + passages)
-    CS-->>API: grounded ✓
-    API-->>C: verified reply (localized) + canonical_ms + new token
-```
+The citizen's facts live *inside* an HMAC-signed state token. An agent can relay the token but cannot alter the facts in it — so even a compromised agent cannot smuggle in a false fact. Each turn shields the input, routes it, narrates through the chosen specialist, and then — on an assess turn — recomputes the verdicts in-process and grounds the narrative against cited passages before the **dual gate** either emits the verified reply or refuses to a human. A fabricated `RM` figure or an ungrounded claim trips the gate and routes to **Talian Kasih 15999**.
 
 ---
 
 ## 3. Deployment & trust boundary
 
-Everything runs in Azure (`rg-benefitnav-my`, `swedencentral`). The **trust boundary** (green) is the only place eligibility and amounts are decided; the LLM layer (blue) is on the *outside* of it and is checked on the way out.
+Everything runs in Azure (`rg-benefitnav-my`, `swedencentral`). The **trust boundary** is the only place eligibility and amounts are decided; the LLM layer sits *outside* it and is checked on the way out. Of the two Container Apps, only `benefitnav-mcp` (the trust core) is inside the boundary.
 
-```mermaid
-flowchart LR
-    subgraph RG["Azure · rg-benefitnav-my · swedencentral"]
-        direction TB
-        subgraph ACA["Azure Container Apps"]
-            API["benefitnav-api<br/>FastAPI conductor + dual gate + UI<br/>managed identity · Azure AI Developer"]
-            MCPC["benefitnav-mcp<br/>trust-core MCP server · 5 tools"]
-        end
-        subgraph AISVC["AIServices · benefitnav-ai-sc-79c45"]
-            AGENTS["Foundry Agent Service · 5× gpt-4o"]
-            CS["Content Safety<br/>Prompt Shields + Groundedness"]
-            EMB["text-embedding-3-large"]
-        end
-        SEARCH["Azure AI Search · Basic<br/>benefitnav-corpus + benefitnav-kb"]
-        BLOB[("Blob · benefitnavstore79c45<br/>6 .gov.my docs")]
-    end
+**Topology:**
 
-    API -->|"managed identity (no keys)"| AGENTS
-    API -->|"groundedness + shields"| CS
-    AGENTS -.->|"MCP tools · HMAC token"| MCPC
-    AGENTS --> SEARCH
-    MCPC --> SEARCH
-    SEARCH --- EMB
-    SEARCH --- BLOB
-
-    classDef trust fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
-    class MCPC trust;
-```
+- **Azure Container Apps** — `benefitnav-api` (the FastAPI conductor + dual gate + UI; system-assigned managed identity, `Azure AI Developer`) and `benefitnav-mcp` (the trust-core MCP server, 5 tools — *inside* the trust boundary).
+- **AIServices · `benefitnav-ai-sc-79c45`** — the Foundry Agent Service (5× gpt-4o), Content Safety (Prompt Shields + Groundedness), and `text-embedding-3-large`.
+- **Azure AI Search · Basic** — the `benefitnav-corpus` and `benefitnav-kb` indexes.
+- **Blob · `benefitnavstore79c45`** — the 6 gazetted `.gov.my` documents.
+- **Edges** — the conductor reaches Foundry by **managed identity** (no keys) and calls Content Safety for shields + groundedness; the Foundry agents reach the trust core over **MCP carrying the HMAC token**; both the agents and the MCP server query Search, which is backed by the embeddings and the blob corpus.
 
 **Credentials.** No keys in the repo. The conductor authenticates to Foundry with its Container App **system-assigned managed identity** (granted `Azure AI Developer` on the AIServices account) — the same `DefaultAzureCredential` code path works locally via `az login`. Search/AOAI keys and the shared HMAC `token-secret` are injected as **Container Apps secrets**. The token-secret is identical on both apps so the conductor's signature verifies on the MCP side.
 
