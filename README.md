@@ -321,5 +321,5 @@ bash infra/teardown.sh
 
 ## Honest limitations
 - **"FastAPI conducts, agents execute."** Same-project Foundry→Foundry A2A delegation is an open platform bug, so the delegation hop lives in the conductor rather than in a single Orchestrator-over-A2A call (see the [Architecture](#architecture) note). Genuine multi-agent on Foundry; only the network hop moved.
-- **gpt-4o quota.** The deployment is small (Standard, 50K TPM). Rapid back-to-back turns can 429 the shared deployment — the conductor retries once, then fails the turn hard (`action="error"`). A real demo (one call per turn) is comfortable.
+- **gpt-4o quota.** The deployment is small (Standard, 50K TPM). Rapid back-to-back turns can 429 the shared deployment("Couldn't reach the assistant just now. Please try again."). The conductor retries once, then fails the turn hard (`action="error"`). A real demo (one call per turn) is comfortable.
 - **i18n translates the explanation, not the chrome.** The generated narrative is translated to EN / 中文 / Tamil on demand; the UI labels are Malay-first (because the data source are in Malay).
