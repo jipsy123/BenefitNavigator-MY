@@ -19,12 +19,16 @@ from types import SimpleNamespace
 
 os.environ.setdefault("BENEFITNAV_TOKEN_SECRET", "test-secret")
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
 from agent.intake import IntakeResult
 from api.app import app
 from compute import elicit
+from compute.profile import Applicant
+from compute.status import summarise
 from mas import agents, orchestrate
 from mas.state import ChatState, decode, encode
 
@@ -35,6 +39,26 @@ client = TestClient(app)
 _OKU_FACTS = {"citizen": True, "is_oku": True, "has_kad_oku": True,
               "unable_to_work": True, "age": 35,
               "individual_income": 0, "household_income": 1500}
+
+
+def _passages_json(facts: dict) -> str:
+    """Build a `{"proofs": [...]}` JSON string covering every verdict citation for the given
+    facts profile. Derived directly from compute/ so it never drifts from the real keys.
+    Used by tests that need the retrieval gate to PASS (i.e. all citation keys proven)."""
+    applicant = Applicant(**{k: v for k, v in facts.items()
+                             if k in Applicant.__dataclass_fields__})
+    assessment = summarise(applicant)
+    proofs, seen = [], set()
+    for r in list(assessment.eligible) + list(assessment.gaps):
+        c = r.citation
+        key = (c.get("doc_name"), c.get("locator"))
+        if key in seen or not c.get("source_url"):
+            continue
+        seen.add(key)
+        proofs.append({"doc_name": c["doc_name"], "locator": c["locator"],
+                       "doc_title": c.get("doc_title"), "source_url": c.get("source_url"),
+                       "passage": f"Petikan bukti untuk {c['locator'][:40]}"})
+    return json.dumps({"proofs": proofs})
 
 
 # --- shared Azure-boundary stubs (autouse; specific tests override) --------------
@@ -54,17 +78,17 @@ def _stub_boundaries(monkeypatch):
                                                         threshold=0.0))
 
 
-def _route_to(action: str, *, narrative: str, passages: str = '{"passages": []}'):
+def _route_to(action: str, *, narrative: str, passages: str = '{"proofs": []}'):
     """Fake _invoke_agent_stream dispatching on which agent FastAPI invokes. The Retrieval
-    agent yields its `retrieve` tool call + the deterministic tool OUTPUT (Mode B); the other
-    specialists yield a canned narrative. `passages` is the raw JSON the retrieve tool returns."""
+    agent yields its `prove` tool call + the deterministic tool OUTPUT (Mode B); the other
+    specialists yield a canned narrative. `passages` is the raw JSON the prove tool returns."""
     def fake_stream(agent_id, _prompt):
         if agent_id == agents.ORCHESTRATOR.id:
             yield ("final", f'{{"action": "{action}", "rationale_ms": "sebab"}}')
             return
         if agent_id == agents.RETRIEVAL.id:
-            yield ("tool", "retrieve")
-            yield ("tool_result", ("retrieve", passages))
+            yield ("tool", "prove")
+            yield ("tool_result", ("prove", passages))
             yield ("final", "")
             return
         if narrative:                       # interview / communicator / escalation
@@ -144,7 +168,8 @@ def test_chat_assess_returns_verified_verdicts(monkeypatch):
     narrative = ("Anda layak menerima RM250 sebulan (BTB) dan RM50 sebulan (STR Bujang). "
                  "Jumlah minimum bulanan anda ialah RM300.")
     monkeypatch.setattr(orchestrate, "_invoke_agent_stream",
-                        _route_to("assess", narrative=narrative))
+                        _route_to("assess", narrative=narrative,
+                                  passages=_passages_json(_OKU_FACTS)))
     resp = client.post("/chat", json={"message": "Beritahu saya sekarang", "lang": "ms",
                                        "token": _token(_OKU_FACTS)})
     assert resp.status_code == 200
@@ -162,7 +187,8 @@ def test_chat_assess_returns_verified_verdicts(monkeypatch):
 def test_chat_gate_refuses_fabricated_amount(monkeypatch):
     # The LLM invents RM99999 — untraceable to any verdict/income/threshold → refuse.
     monkeypatch.setattr(orchestrate, "_invoke_agent_stream",
-                        _route_to("assess", narrative="Anda akan menerima RM99999 sebulan."))
+                        _route_to("assess", narrative="Anda akan menerima RM99999 sebulan.",
+                                  passages=_passages_json(_OKU_FACTS)))
     resp = client.post("/chat", json={"message": "berapa", "lang": "ms",
                                        "token": _token(_OKU_FACTS)})
     assert resp.status_code == 200
@@ -178,7 +204,8 @@ def test_chat_assess_fails_hard_when_communicator_unavailable(monkeypatch):
     # local degraded summary — the turn fails. (The verified cards are correct, but the
     # product decision is Foundry-or-fail: the agent must narrate or the turn errors.)
     monkeypatch.setattr(orchestrate, "_invoke_agent_stream",
-                        _route_to("assess", narrative=""))
+                        _route_to("assess", narrative="",
+                                  passages=_passages_json(_OKU_FACTS)))
     resp = client.post("/chat", json={"message": "nilai", "lang": "ms",
                                        "token": _token(_OKU_FACTS)})
     body = resp.json()
@@ -192,7 +219,8 @@ def test_chat_gate_refuses_present_but_unverifiable_narrative(monkeypatch):
     # A PRESENT narrative that fails the gate (fabricated RM) is a real trust violation and
     # must refuse + route to a human — distinct from an absent agent (which now errors).
     monkeypatch.setattr(orchestrate, "_invoke_agent_stream",
-                        _route_to("assess", narrative="Anda akan menerima RM88888 sebulan."))
+                        _route_to("assess", narrative="Anda akan menerima RM88888 sebulan.",
+                                  passages=_passages_json(_OKU_FACTS)))
     resp = client.post("/chat", json={"message": "berapa", "lang": "ms",
                                        "token": _token(_OKU_FACTS)})
     body = resp.json()
@@ -266,7 +294,8 @@ def test_run_chat_stream_gates_narrative_before_reveal(monkeypatch):
     narrative = ("Anda layak menerima RM250 sebulan (BTB) dan RM50 sebulan (STR Bujang). "
                  "Jumlah minimum bulanan anda ialah RM300.")
     monkeypatch.setattr(orchestrate, "_invoke_agent_stream",
-                        _route_to("assess", narrative=narrative))
+                        _route_to("assess", narrative=narrative,
+                                  passages=_passages_json(_OKU_FACTS)))
     events = list(orchestrate.run_chat_stream("nilai", _token(_OKU_FACTS), "ms"))
     # No narrative delta ever leaves the server.
     assert not any(e["type"] == "delta" and e.get("scope") == "narrative" for e in events)
@@ -282,7 +311,8 @@ def test_run_chat_stream_never_streams_fabricated_amount(monkeypatch):
     # A fabricated RM must never appear in ANY streamed event — not even briefly. The user
     # sees only the refusal, never the bad number.
     monkeypatch.setattr(orchestrate, "_invoke_agent_stream",
-                        _route_to("assess", narrative="Anda akan menerima RM99999 sebulan."))
+                        _route_to("assess", narrative="Anda akan menerima RM99999 sebulan.",
+                                  passages=_passages_json(_OKU_FACTS)))
     events = list(orchestrate.run_chat_stream("berapa", _token(_OKU_FACTS), "ms"))
     assert all("99999" not in str(e.get("text", "")) for e in events)
     assert events[-1]["turn"].action == "refuse"
@@ -401,11 +431,12 @@ def test_chat_skip_when_interview_done_still_assesses(monkeypatch):
     # proceeds and the turn assesses.
     narrative = ("Anda layak menerima RM250 sebulan (BTB) dan RM50 sebulan (STR Bujang). "
                  "Jumlah minimum bulanan anda ialah RM300.")
-    monkeypatch.setattr(orchestrate, "_invoke_agent_stream",
-                        _route_to("assess", narrative=narrative))
     done_facts = {**_OKU_FACTS, "marital_status": "single", "has_dependents": False,
                   "is_working": False, "is_carer": False, "str_approved": False,
                   "ekasih_listed": False}
+    monkeypatch.setattr(orchestrate, "_invoke_agent_stream",
+                        _route_to("assess", narrative=narrative,
+                                  passages=_passages_json(done_facts)))
     token = encode(ChatState(facts=done_facts))
     resp = client.post("/chat", json={"message": orchestrate.SKIP_SENTINEL_MS,
                                       "lang": "ms", "token": token})
@@ -415,16 +446,19 @@ def test_chat_skip_when_interview_done_still_assesses(monkeypatch):
 
 
 def test_chat_assess_grounds_via_retrieval_agent(monkeypatch):
-    # The Retrieval agent calls retrieve and returns one passage; the assess turn succeeds
-    # and the RETRIEVE stage reports the captured passage count.
+    # The Retrieval agent calls prove and returns proofs covering all verdict citations;
+    # the assess turn succeeds and the RETRIEVE stage reports the captured proof count.
+    oku_passages = _passages_json(_OKU_FACTS)
     monkeypatch.setattr(orchestrate, "_invoke_agent_stream",
         _route_to("assess", narrative="Anda layak menerima BTB RM250 dan STR RM50.",
-                  passages='{"passages": [{"content": "Garis panduan JKM..."}]}'))
+                  passages=oku_passages))
     resp = client.post("/chat", json={"message": "nilai sekarang",
                                       "token": _token(_OKU_FACTS), "lang": "ms"})
     body = resp.json()
     assert resp.status_code == 200 and body["action"] == "assess"
-    assert any(s["stage"] == "RETRIEVE" and s["status"] == "ok" and s["passages"] == 1
+    import json as _json
+    n_proofs = len(_json.loads(oku_passages)["proofs"])
+    assert any(s["stage"] == "RETRIEVE" and s["status"] == "ok" and s["passages"] == n_proofs
                for s in body["trace"])
 
 
@@ -462,4 +496,23 @@ def test_chat_assess_fails_hard_when_retrieval_agent_unavailable(monkeypatch):
                                       "token": _token(_OKU_FACTS), "lang": "ms"})
     body = resp.json()
     assert resp.status_code == 200 and body["action"] == "error"
+    assert any(s["stage"] == "RETRIEVE" and s["status"] == "error" for s in body["trace"])
+
+
+def test_chat_assess_fails_hard_when_prove_returns_empty_proofs(monkeypatch):
+    # Retrieval agent calls prove but returns an empty proof list while the profile qualifies
+    # for at least one programme (citizen + has_dependents + household_income=2000).
+    # Under the OLD check (any(not p.get("passage") for p in passages)), any() over [] is
+    # False so the turn would incorrectly proceed. Under Fix 1 (set-difference), verdict_keys
+    # is non-empty while proven_keys is empty → the difference is non-empty → fail-hard.
+    qualifying_facts = {"citizen": True, "has_dependents": True, "household_income": 2000}
+    monkeypatch.setattr(orchestrate, "_invoke_agent_stream",
+                        _route_to("assess", narrative="Anda layak menerima bantuan.",
+                                  passages='{"proofs": []}'))
+    resp = client.post("/chat", json={"message": "nilai sekarang",
+                                      "token": _token(qualifying_facts), "lang": "ms"})
+    body = resp.json()
+    assert resp.status_code == 200
+    # Must fail hard — NOT a successful assessment.
+    assert body["action"] == "error"
     assert any(s["stage"] == "RETRIEVE" and s["status"] == "error" for s in body["trace"])

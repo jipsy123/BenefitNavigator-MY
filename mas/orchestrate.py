@@ -279,20 +279,19 @@ def _parse_contract(text: str) -> dict:
         return {}
 
 
-def _parse_passages(output: str) -> Optional[list[dict]]:
-    """Parse the `retrieve` tool's JSON output into a passages list. Returns None when the
-    tool produced nothing usable (blank/un-parseable output, an `error` key, or the wrong
-    shape) so the caller fails hard; returns the (possibly empty) list when retrieval
-    genuinely ran — an empty list means "searched, found nothing", which is a valid result."""
+def _parse_proofs(output: str) -> Optional[list[dict]]:
+    """Parse the `prove` tool's JSON output into a proofs list. Returns None when the tool
+    produced nothing usable (blank/unparseable, an `error` key, or wrong shape) so the
+    caller fails hard; returns the list (possibly with empty passages) when it genuinely ran."""
     if not output:
         return None
     try:
         data = json.loads(output)
     except (json.JSONDecodeError, TypeError):
         return None
-    if not isinstance(data, dict) or data.get("error") or not isinstance(data.get("passages"), list):
+    if not isinstance(data, dict) or data.get("error") or not isinstance(data.get("proofs"), list):
         return None
-    return data["passages"]
+    return data["proofs"]
 
 
 # --- ROUTE: the Orchestrator agent decides the action ----------------------------
@@ -333,7 +332,7 @@ def _interview_prompt(token: str, message: str, situation_ms: str) -> str:
 def _communicator_prompt(message: str, verdict_block_ms: str,
                          passages: list[dict]) -> str:
     src = "\n\n".join(
-        (p.get("content", "") or "")[:_PASSAGE_SNIPPET_CHARS]
+        (p.get("passage", "") or "")[:_PASSAGE_SNIPPET_CHARS]
         for p in passages[:_MAX_PASSAGES_FOR_NARRATION]) or "(tiada petikan tambahan)"
     return (
         "VERDIK MUKTAMAD (sumber kebenaran — guna HANYA angka RM di sini):\n"
@@ -363,14 +362,11 @@ def _escalation_prompt(message: str, reason_ms: str) -> str:
         "jalan buntu — beri kenalan seterusnya yang konkrit. Output HANYA teks mesej.")
 
 
-def _retrieval_prompt(message: str, situation_ms: str) -> str:
+def _proof_prompt(token: str) -> str:
     return (
-        f"SITUASI RAKYAT (untuk konteks):\n{situation_ms}\n\n"
-        f"MESEJ RAKYAT:\n{message}\n\n"
-        "Rumuskan satu pertanyaan carian ringkas dalam Bahasa Melayu tentang bantuan "
-        "kerajaan yang berkaitan, kemudian panggil retrieve(query_ms) dengan pertanyaan itu "
-        "untuk mendapatkan petikan rasmi .gov.my. Panggil retrieve SEKALI sahaja. Anda tidak "
-        "membuat keputusan kelayakan — petikan ini untuk grounding sahaja.")
+        f"STATE_TOKEN (pass this verbatim to the prove tool):\n{token}\n\n"
+        "Call prove(state_token) with the token above EXACTLY once, then return the official "
+        "passages it gives you, unchanged. Do not add commentary and do not decide eligibility.")
 
 
 # --- deterministic situation summary (the router's guidance, not its decision) ----
@@ -413,7 +409,7 @@ def _gate(narrative_ms: str, applicant, assessment: Assessment,
     # "register at the JKM office / call Talian Kasih" guidance read as ungrounded and
     # falsely refuse a correct answer.
     grounding = ([narrate.build_facts_text(assessment), narrate.PROCEDURAL_FACTS_MS]
-                 + [p.get("content", "") for p in passages])
+                 + [p.get("passage", "") for p in passages])
     g = safety.detect_groundedness(narrative_ms, grounding)
 
     ok = amounts_ok and not (g.available and not g.grounded)
@@ -432,31 +428,50 @@ def _amount_only_gate(text_ms: str, applicant) -> tuple[bool, list[int]]:
 
 # --- payload builders ------------------------------------------------------------
 
-def _verdict_citations(assessment: Assessment) -> list[dict]:
+def _assessment_payload(narrative_ms: str, applicant, assessment: Assessment,
+                        known: dict, proofs: list[dict]) -> dict:
+    """Build the Malay assessment payload (the shape localize_assess expects), with each
+    verdict citation enriched by its proving passage — on the per-programme cards AND the
+    deduped top-level citations list. localize never translates citations, so passages stay
+    verbatim Malay."""
+    pmap = {(p.get("doc_name"), p.get("locator")): p.get("passage", "")
+            for p in (proofs or [])}
+
+    def _enrich(citation: dict) -> dict:
+        return {**citation, "passage": pmap.get(
+            (citation.get("doc_name"), citation.get("locator")), "")}
+
+    eligible = []
+    for r in assessment.eligible:
+        d = checker.to_dict(r)
+        d["citation"] = _enrich(d["citation"])
+        eligible.append(d)
+    gaps = []
+    for g in assessment.gaps:
+        d = trust_tools._gap_dict(g)
+        d["citation"] = _enrich(d["citation"])
+        gaps.append(d)
+
+    # Same (doc_name, locator) dedup as trust_tools.proof_citations / _verdict_citations — keep aligned.
     seen: set[tuple] = set()
-    out: list[dict] = []
+    citations: list[dict] = []
     for r in list(assessment.eligible) + list(assessment.gaps):
         c = r.citation
         key = (c.get("doc_name"), c.get("locator"))
-        if key not in seen and c.get("source_url"):
-            seen.add(key)
-            out.append({"doc_title": c.get("doc_title"), "locator": c.get("locator"),
-                        "source_url": c.get("source_url")})
-    return out
+        if key in seen or not c.get("source_url"):
+            continue
+        seen.add(key)
+        citations.append({"doc_title": c.get("doc_title"), "locator": c.get("locator"),
+                          "source_url": c.get("source_url"),
+                          "passage": pmap.get(key, "")})
 
-
-def _assessment_payload(narrative_ms: str, applicant, assessment: Assessment,
-                        known: dict) -> dict:
-    """Build the Malay assessment payload in the SAME shape localize_assess expects
-    (mirrors agent.orchestrator.PipelineResult fields used by the UI)."""
-    assumption_trail = assumptions.unspecified_ms(known)
     return {
         "message_ms": narrative_ms,
-        "assumptions_ms": list(assumption_trail),
-        "eligible": [checker.to_dict(r) for r in assessment.eligible],
-        "gaps": [trust_tools._gap_dict(g) for g in assessment.gaps],
+        "assumptions_ms": list(assumptions.unspecified_ms(known)),
+        "eligible": eligible,
+        "gaps": gaps,
         "total_monthly_min": assessment.total_monthly_min,
-        "citations": _verdict_citations(assessment),
+        "citations": citations,
         "stages": [],
     }
 
@@ -532,18 +547,18 @@ def _stream_agent_text(agent_id: str, prompt: str, scope: str, *,
 
 
 def _stream_retrieval(agent_id: str, prompt: str) -> Iterator[dict]:
-    """Stream the Retrieval agent: surface its `retrieve` tool call as a wire event and
-    capture the tool's DETERMINISTIC output (passages from the KB — never the agent's prose).
-    Returns the passages list via generator return, or None if the agent produced no usable
-    retrieve result (the caller then fails hard). AgentUnavailable propagates (fail-hard)."""
+    """Stream the Retrieval agent: surface its `prove` tool call as a wire event and
+    capture the tool's DETERMINISTIC output (proofs from the KB — never the agent's prose).
+    Returns the proofs list via generator return, or None if the agent produced no usable
+    prove result (the caller then fails hard). AgentUnavailable propagates (fail-hard)."""
     passages: Optional[list[dict]] = None
     for kind, payload in _invoke_agent_stream(agent_id, prompt):
         if kind == "tool":
             yield {"type": "tool", "agent": "retrieval", "tool": payload}
         elif kind == "tool_result":
             name, output = payload
-            if name == "retrieve":
-                parsed = _parse_passages(output)
+            if name == "prove":
+                parsed = _parse_proofs(output)
                 if parsed is not None:        # never let an empty/dup emission clobber a hit
                     passages = parsed
     return passages
@@ -700,13 +715,27 @@ def run_chat_stream(message: str, token: Optional[str] = None,
     yield {"type": "agent", "agent": "retrieval", "phase": "start"}
     try:
         passages = yield from _stream_retrieval(
-            agents.RETRIEVAL.id, _retrieval_prompt(message, situation))
+            agents.RETRIEVAL.id, _proof_prompt(agent_token))
     except AgentUnavailable as exc:
         yield from _fail(base_state, lang, trace, "RETRIEVE", exc)
         return
     if passages is None:
         yield from _fail(base_state, lang, trace, "RETRIEVE",
                          AgentUnavailable("retrieval agent produced no usable passages"))
+        return
+    # Fail-hard: every verdict citation must be proven. Compare the deduped citation keys
+    # the verdicts carry against the keys actually proven (non-empty passage). Checking only
+    # the returned list's emptiness is insufficient — it can't detect an under-covered set.
+    # (No verdicts at all → both sets empty → proceeds, which is correct: nothing to prove.)
+    verdict_keys = {
+        (r.citation.get("doc_name"), r.citation.get("locator"))
+        for r in list(assessment.eligible) + list(assessment.gaps)
+        if r.citation.get("source_url")
+    }
+    proven_keys = {(p.get("doc_name"), p.get("locator")) for p in passages if p.get("passage")}
+    if verdict_keys - proven_keys:
+        yield from _fail(base_state, lang, trace, "RETRIEVE",
+                         AgentUnavailable("a verdict citation could not be proven"))
         return
     trace.append({"stage": "RETRIEVE", "status": "ok", "passages": len(passages)})
     yield {"type": "stage", "stage": "RETRIEVE", "status": "ok", "passages": len(passages)}
@@ -742,7 +771,7 @@ def run_chat_stream(message: str, token: Optional[str] = None,
         return
 
     # 5) Verified → localize + persist -----------------------------------------
-    canonical = _assessment_payload(narrative_ms, applicant, assessment, known)
+    canonical = _assessment_payload(narrative_ms, applicant, assessment, known, passages)
     result, tok_ok = localize.localize_assess(canonical, lang)
     new_state = base_state.evolve(
         assessment={"total_monthly_min": assessment.total_monthly_min},
