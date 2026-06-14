@@ -1,6 +1,6 @@
 # BenefitNavigator Malaysia 🇲🇾
 
-**Find the government benefits you're actually entitled to — explained in plain Bahasa Melayu, with every claim traceable to a gazetted source, and a safety net that refuses to guess.**
+**Find the government benefits you're actually entitled to — explained in plain language, with every claim traceable to a gazetted source, and a safety net that refuses to guess.**
 
 Millions of eligible Malaysians never claim benefits they qualify for — the rules are scattered across JKM, PERKESO and LHDN documents, written in dense officialese, and "Am I eligible?" has no single answer. BenefitNavigator runs a short, adaptive conversation in Bahasa Melayu and returns: which benefits you already qualify for (with amounts), which you *almost* qualify for and the one action that would unlock them, and a ready-to-send appeal letter — all grounded in official sources.
 
