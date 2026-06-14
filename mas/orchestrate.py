@@ -441,16 +441,10 @@ def _assessment_payload(narrative_ms: str, applicant, assessment: Assessment,
         return {**citation, "passage": pmap.get(
             (citation.get("doc_name"), citation.get("locator")), "")}
 
-    eligible = []
-    for r in assessment.eligible:
-        d = checker.to_dict(r)
-        d["citation"] = _enrich(d["citation"])
-        eligible.append(d)
-    gaps = []
-    for g in assessment.gaps:
-        d = trust_tools._gap_dict(g)
-        d["citation"] = _enrich(d["citation"])
-        gaps.append(d)
+    eligible = [{**checker.to_dict(r), "citation": _enrich(r.citation)}
+                for r in assessment.eligible]
+    gaps = [{**trust_tools._gap_dict(g), "citation": _enrich(g.citation)}
+            for g in assessment.gaps]
 
     # Same (doc_name, locator) dedup as trust_tools.proof_citations / _verdict_citations — keep aligned.
     seen: set[tuple] = set()
