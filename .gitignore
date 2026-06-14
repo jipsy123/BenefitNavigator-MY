@@ -38,6 +38,9 @@ docs/superpowers/
 # Office temp lock files (created while a deck is open)
 ~$*
 
+# Demo video kept out of the tree — 32 MB, hosted on YouTube and linked from the README
+Demo/
+
 # Embedded skill clone (its own git repo — not part of this project)
 excalidraw-diagram-skill/
 

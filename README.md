@@ -9,6 +9,12 @@ Built for the **Microsoft Agents League** hackathon — a **multi-agent reasonin
 > **Live demo:** <https://benefitnav-api.ashyocean-f47e8ddf.swedencentral.azurecontainerapps.io>
 > *(May be scaled to zero between demos to conserve credit — see [Cost & teardown](#cost--teardown).)*
 
+## 🎥 Demo walkthrough
+
+[![BenefitNavigator Malaysia — demo walkthrough](https://img.youtube.com/vi/mCWazrbBqCk/maxresdefault.jpg)](https://youtu.be/mCWazrbBqCk)
+
+> ▶️ **[Watch the walkthrough on YouTube](https://youtu.be/mCWazrbBqCk)** — a Bahasa Melayu conversation that assesses eligibility, surfaces the one near-miss action that unlocks more, and generates an appeal letter — every claim grounded in a gazetted `.gov.my` source.
+
 ---
 
 ## Why this is trustworthy (the core idea)
