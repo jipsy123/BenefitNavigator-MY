@@ -13,7 +13,7 @@ Built for the **Microsoft Agents League** hackathon — a **multi-agent reasonin
 
 [![BenefitNavigator Malaysia — demo walkthrough](docs/demo-thumbnail.png)](https://youtu.be/mCWazrbBqCk)
 
-> ▶️ **[Watch the walkthrough on YouTube](https://youtu.be/mCWazrbBqCk)** — a Bahasa Melayu conversation that assesses eligibility, surfaces the one near-miss action that unlocks more, and generates an appeal letter — every claim grounded in a gazetted `.gov.my` source.
+> ▶️ **[Watch the walkthrough on YouTube](https://youtu.be/mCWazrbBqCk)**
 
 ---
 
