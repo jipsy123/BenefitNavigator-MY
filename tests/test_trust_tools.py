@@ -89,3 +89,21 @@ def test_grade_reports_readability():
     assert set(out) == {"grade", "readable", "target_grade"}
     assert isinstance(out["grade"], float) and out["grade"] >= 0.0
     assert isinstance(out["readable"], bool)
+
+
+# --- proof_citations -------------------------------------------------------------
+
+def test_proof_citations_are_deduped_gov_sources_with_doc_name():
+    out = trust_tools.proof_citations(
+        _token(citizen=True, has_dependents=True, household_income=2000))
+    assert out, "an eligible verdict must yield at least one citation to prove"
+    keys = [(c["doc_name"], c["locator"]) for c in out]
+    assert len(keys) == len(set(keys))                      # deduped
+    for c in out:
+        assert (c["doc_name"] and c["locator"] and c["doc_title"]
+                and c["source_url"] and c["name_ms"])
+
+
+def test_proof_citations_verifies_the_token():
+    with pytest.raises(InvalidToken):
+        trust_tools.proof_citations(_token(citizen=True) + "tamper")
