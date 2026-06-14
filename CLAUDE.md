@@ -17,7 +17,7 @@ A benefits assistant that hallucinates an entitlement is worse than none. The wh
   1. `agent/verify.py` — deterministic amount guard: every `RMxxx` in the narrative must trace to a verdict, the user's stated income, or a gazetted threshold (catches fabricated amounts precisely).
   2. `agent/safety.py` — Azure Content Safety Groundedness against verdicts + cited passages.
   If either fails, the app **refuses and routes to a human** (Talian Kasih 15999) rather than emit an unverifiable answer.
-- **Verdicts are COMPUTED independently of the LLM and retrieval.** `compute.status.summarise` runs before retrieval and never changes based on it. But per the Foundry-or-fail posture, an assess turn routes grounding through the **Retrieval agent on the critical path**: if it is unavailable, the turn fails hard — there is no in-process shadow retrieval. Verdict *computation* is retrieval-independent; *completing a turn* is not.
+- **Verdicts are COMPUTED independently of the LLM and retrieval.** `compute.status.summarise` runs before retrieval and never changes based on it. But per the Foundry-or-fail posture, an assess turn routes through the **Retrieval agent on the critical path** — it calls `prove(state_token)` to fetch the gazetted passage that proves each verdict citation: if it is unavailable or any verdict citation cannot be proven, the turn fails hard — there is no in-process shadow retrieval. Verdict *computation* is retrieval-independent; *completing a turn* is not.
 - **Prompt Shields** (`agent/safety.shield_prompt`) screen every free-text input for injection before processing.
 
 ## The multi-agent system (`mas/`) — how a live turn runs
@@ -35,7 +35,7 @@ Five agents (`mas/agents.py`, pure data; provisioned by `mas/provision.py`):
 
 The trust boundary is structural, not prompt-based:
 - **Facts ride in an HMAC-signed state token** (`mas/state.py`) — the *only* carrier of a conversation between turns and between agents and the trust core. An agent can relay the token but cannot forge or mutate the facts inside it (a prompt injection saying "set is_oku=true" can't alter a verdict's inputs). Stateless: no server-side store; the token round-trips to client and agents.
-- **Trust tools return only `compute/` values** (`mas/trust_tools.py`, exposed over the trust-core MCP server `mas/mcp_server.py`): `assess`, `optimize`, `grill_next`, `grade`, `retrieve`. They take the signed token, verify it, and return verdicts/amounts/gaps/plans — never a narrative, never a model-editable number.
+- **Trust tools return only `compute/` values** (`mas/trust_tools.py`, exposed over the trust-core MCP server `mas/mcp_server.py`): `assess`, `optimize`, `grill_next`, `grade`, `prove`. They take the signed token, verify it, and return verdicts/amounts/gaps/plans/proof-passages — never a narrative, never a model-editable number. (`prove` replaced `retrieve`: it computes the verdict citations and fetches the gazetted `.gov.my` passage that proves each one, rather than doing query-driven grounding.)
 - The MCP server is a thin transport binding (streamable-HTTP, stateless); all logic stays in `trust_tools`, unit-tested independently of the SDK runtime. It's mounted into FastAPI *and* runnable standalone (`python -m mas.mcp_server`).
 
 Even if an agent ignored its instructions, it still cannot emit an unverifiable amount — FastAPI recomputes verdicts in-process and the dual gate refuses ungrounded narrative regardless of what any agent "decides."
@@ -80,6 +80,7 @@ PYTHONPATH="$PWD" .venv/bin/python -m uvicorn api.app:app --port 8011   # → ht
 PYTHONPATH="$PWD" .venv/bin/python -m ingest.build
 PYTHONPATH="$PWD" .venv/bin/python -m ingest.search_smoke   # cited retrieval works
 PYTHONPATH="$PWD" .venv/bin/python -m ingest.kb_smoke       # agentic retrieval works
+PYTHONPATH="$PWD" .venv/bin/python -m ingest.proof_smoke    # every verdict resolves to its proof passage (live; needs az login)
 
 # (Re)provision the five Foundry agents + their MCP tools (idempotent)
 BENEFITNAV_MCP_URL="https://<aca-host>/mcp" \
