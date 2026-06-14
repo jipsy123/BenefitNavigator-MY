@@ -26,7 +26,31 @@ def _token(**facts) -> str:
 
 def test_all_tools_registered():
     names = {t.name for t in asyncio.run(mcp.list_tools())}
-    assert names == {"assess", "optimize", "grill_next", "grade", "retrieve"}
+    assert names == {"assess", "optimize", "grill_next", "grade", "prove"}
+
+
+def test_prove_returns_proofs_through_mcp(monkeypatch):
+    from ingest import knowledge_base as kb
+
+    def fake_fetch_proofs(citations):
+        return [{**c, "passage": "Kelayakan SARA 2026 adalah terhad..."} for c in citations]
+
+    monkeypatch.setattr(kb, "fetch_proofs", fake_fetch_proofs)
+    out = _call("prove", state_token=_token(citizen=True, has_dependents=True,
+                                            household_income=2000))
+    assert out["proofs"] and all(p["passage"] for p in out["proofs"])
+    assert all(p.get("doc_name") and p.get("source_url") for p in out["proofs"])
+
+
+def test_prove_rejects_a_tampered_token():
+    try:
+        blocks = asyncio.run(mcp.call_tool("prove", {"state_token": "not-a-real-token"}))
+        text = " ".join(getattr(b, "text", "") for b in blocks).lower()
+        assert "invalid" in text or "error" in text, f"expected an error, got: {text[:200]}"
+        assert "passage" not in text and "proofs" not in text
+    except Exception as exc:  # FastMCP may raise instead of returning error content
+        assert "invalid" in str(exc).lower()
+        assert "passage" not in str(exc).lower() and "proofs" not in str(exc).lower()
 
 
 def test_assess_tool_returns_verdicts_through_mcp():

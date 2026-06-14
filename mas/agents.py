@@ -89,15 +89,14 @@ RETRIEVAL = AgentSpec(
     id="retrieval",
     display_name="Retrieval Agent",
     incoming_a2a=True,
-    tools=(ToolSpec(TOOL_MCP, "retrieve"),),
+    tools=(ToolSpec(TOOL_MCP, "prove"),),
     instructions=_instr(
-        "Your job: ground the conversation in official sources. From the citizen's "
-        "situation, formulate ONE concise Malay search query and call retrieve(query_ms) "
-        "exactly once over the knowledge base of gazetted .gov.my benefit guidelines. "
-        "You MUST call retrieve — the conductor grounds the narrative on the passages it "
-        "returns and the assess turn cannot complete without them (it fails hard rather "
-        "than answer ungrounded). Return passages and citations only (with their document "
-        "name and locator) — never interpret them into an eligibility decision."),
+        "Your job: fetch the official .gov.my passage that PROVES each verdict. Call "
+        "prove(state_token) EXACTLY once with the token you are given; it returns one cited "
+        "passage per verdict (document, locator, source link, passage text) drawn from the "
+        "gazetted benefit guidelines. You MUST call prove — the assess turn cannot complete "
+        "without these proofs (it fails hard rather than answer unproven). Return the proofs "
+        "exactly as given; never interpret them into an eligibility decision."),
 )
 
 COMMUNICATOR = AgentSpec(

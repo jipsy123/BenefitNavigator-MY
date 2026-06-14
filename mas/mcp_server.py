@@ -1,7 +1,7 @@
 """The trust-core MCP server — a thin transport binding over mas/trust_tools.
 
 This is the ONLY surface through which Foundry-hosted agents reach the deterministic
-core. It registers five tools (assess / optimize / grill_next / grade / retrieve) and
+core. It registers five tools (assess / optimize / grill_next / grade / prove) and
 does nothing else: all logic lives in trust_tools, which is unit-tested independently.
 Keeping this layer dumb means the trust-critical code never depends on the MCP/SDK runtime.
 
@@ -47,7 +47,7 @@ mcp = FastMCP(
 )
 
 
-def _guard_token(fn, token: str) -> dict:
+def _guard_token(fn, token: str):
     """Run a token-taking trust tool, converting tamper/expiry into a clean error."""
     try:
         return fn(token)
@@ -96,18 +96,17 @@ def grade(text: str) -> dict:
 
 
 @mcp.tool(
-    name="retrieve",
-    description="Search the gazetted .gov.my benefit-guideline knowledge base for a Malay "
-    "query and return the most relevant cited passages (each with its document name and "
-    "locator). Grounding only — never an eligibility decision.",
+    name="prove",
+    description="Fetch the gazetted .gov.my passage that proves each verdict for the "
+    "profile carried in state_token. Returns one cited passage per verdict citation "
+    "(document, locator, source link, passage text). Evidence only — never an eligibility "
+    "decision. Fail-hard: a knowledge-base error is raised, never swallowed.",
 )
-def retrieve(query_ms: str) -> dict:
-    """Grounding retrieval over the gazetted .gov.my corpus. Fail-hard: a knowledge-base
-    error is raised here, never swallowed. Downstream this ends the turn one of two ways —
-    either the agent run itself fails (the conductor sees AgentUnavailable) or the agent
-    returns no usable passages (the conductor hard-fails on `passages is None`). Either way
-    the assess turn ends as action="error"; there is no silent empty-grounding fallback."""
-    return {"passages": kb.retrieve_passages(query_ms, reasoning="low")}
+def prove(state_token: str) -> dict:
+    """Compute the verdict citations from the signed token, then retrieve a proving passage
+    for each. Compute decides WHICH sources prove the verdicts; retrieval fetches them."""
+    citations = _guard_token(trust_tools.proof_citations, state_token)
+    return {"proofs": kb.fetch_proofs(citations)}
 
 
 # ASGI app for mounting into FastAPI (one dev tunnel serves API + MCP).

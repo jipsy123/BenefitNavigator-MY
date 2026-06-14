@@ -59,6 +59,30 @@ def _verdict_citations(assessment: Assessment) -> list[dict]:
     return out
 
 
+def proof_citations(state_token: str) -> list[dict]:
+    """The gazetted citations whose passages prove this profile's verdicts.
+
+    Pure compute (decode + summarise), no retrieval: it decides WHICH sources back the
+    verdicts; the MCP `prove` tool fetches a passage for each. Carries `doc_name` and
+    `name_ms` (which `_verdict_citations` drops) because the fetcher needs both — the
+    locator for an exact lookup, the programme name for a doc-scoped semantic fallback.
+    When several programmes share one citation (e.g. STR Isi Rumah and Bujang both cite S5), the first-seen `name_ms` (eligible before gaps) is kept; this is intentional — `name_ms` is only a fallback search hint, and such colliding citations resolve by exact locator, so the hint is never used for them."""
+    applicant, _ = _applicant_and_state(state_token)
+    a = summarise(applicant)
+    seen: set[tuple] = set()
+    out: list[dict] = []
+    for r in list(a.eligible) + list(a.gaps):
+        c = r.citation
+        key = (c.get("doc_name"), c.get("locator"))
+        if key in seen or not c.get("source_url"):
+            continue
+        seen.add(key)
+        out.append({"doc_name": c.get("doc_name"), "locator": c.get("locator"),
+                    "doc_title": c.get("doc_title"), "source_url": c.get("source_url"),
+                    "name_ms": r.name_ms})
+    return out
+
+
 def _need_dict(need: Optional[elicit.FieldNeed]) -> Optional[dict]:
     """Serialise the engine's chosen question. No `question_text`: phrasing is the
     Interview agent's job; the engine only decides WHICH field, deterministically."""
