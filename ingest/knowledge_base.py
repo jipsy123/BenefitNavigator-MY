@@ -7,9 +7,121 @@ so the downstream agent reasons over grounded content (cite-or-refuse).
 from __future__ import annotations
 
 import json
+import re
 
 from . import config, sources
 from .restclient import search_request
+
+# ---------------------------------------------------------------------------
+# Proof-passage retrieval helpers (Task 2: retrieval proves the verdict)
+# ---------------------------------------------------------------------------
+
+_PROOF_MAX_CHARS = 600
+_NOISE_PREFIXES = ("JKM 100/03/1", "Garis Panduan Pengurusan", "Bantuan Kewangan Persekutuan")
+_TOC_RE = re.compile(r"\d+\.\d+\.\s")          # "6.1. ", "6.2. " — the JKM table-of-contents
+_TOC_MIN_ENTRIES = 3        # a chunk with >=3 "6.1."-style refs is a table-of-contents, not a clause
+
+
+def _clean_passage(text: str, max_chars: int = _PROOF_MAX_CHARS) -> str:
+    """Strip the page-header boilerplate + bare page numbers that the JKM PDF extraction
+    leaves on their own lines, collapse whitespace, and cap length. FAQ passages pass through clean."""
+    lines: list[str] = []
+    for line in (text or "").split("\n"):
+        stripped = line.strip()
+        if not stripped or stripped.isdigit():
+            continue
+        if any(stripped.startswith(prefix) for prefix in _NOISE_PREFIXES):
+            continue
+        lines.append(stripped)
+    collapsed = " ".join(" ".join(lines).split())
+    return collapsed[:max_chars].rstrip()
+
+
+def _odata_quote(value: str) -> str:
+    """Escape a value for an OData string literal (doc names are constants, but be safe)."""
+    return value.replace("'", "''")
+
+
+def _search(body: dict) -> list[dict]:
+    result = search_request("POST", f"indexes/{config.SEARCH_INDEX}/docs/search",
+                            config.SEARCH_API_INDEX, body=body)
+    return (result or {}).get("value", [])
+
+
+def fetch_by_locator(doc_name: str, locator: str) -> dict | None:
+    """Exact resolution: the chunk in `doc_name` whose locator equals `locator`
+    (works for FAQ/akta docs whose locators survived extraction — e.g. S5, S2)."""
+    hits = _search({
+        "search": locator,
+        "filter": f"doc_name eq '{_odata_quote(doc_name)}'",
+        "select": "doc_name,doc_title,locator,source_url,content",
+        "top": 10,
+    })
+    for hit in hits:
+        if hit.get("locator") == locator:
+            return hit
+    return None
+
+
+def fetch_by_topic(doc_name: str, query_hint: str) -> dict | None:
+    """Doc-scoped semantic resolution for docs whose locators were mangled by extraction
+    (the JKM guide). Skips the table-of-contents chunk so the eligibility clause wins."""
+    hits = _search({
+        "search": query_hint,
+        "queryType": "semantic",
+        "semanticConfiguration": config.SEMANTIC_CONFIG,
+        "filter": f"doc_name eq '{_odata_quote(doc_name)}'",
+        "vectorQueries": [{"kind": "text", "text": query_hint,
+                           "fields": "content_vector", "k": 5}],
+        "select": "doc_name,doc_title,locator,source_url,content",
+        "top": 5,
+    })
+    for hit in hits:
+        if len(_TOC_RE.findall(hit.get("content", ""))) >= _TOC_MIN_ENTRIES:  # a table-of-contents chunk
+            continue
+        return hit
+    return None        # all hits were table-of-contents → no usable clause (caller fails hard)
+
+
+def fetch_passage(citation: dict) -> dict | None:
+    """The gazetted passage that proves one verdict: exact-locator first, doc-scoped
+    semantic fallback otherwise. Returns the citation enriched with a cleaned `passage`,
+    or None if the corpus yielded nothing usable for it. The citation should carry
+    `name_ms` (as `proof_citations` provides) so the JKM doc-scoped fallback can build
+    a meaningful query hint; without it the hint degrades to the mangled locator."""
+    hit = fetch_by_locator(citation["doc_name"], citation["locator"])
+    if hit is None:
+        hint = f"{citation.get('name_ms') or citation['locator']} syarat kelayakan kadar bantuan"
+        hit = fetch_by_topic(citation["doc_name"], hint)
+    if hit is None:
+        return None
+    return {
+        "doc_name": citation.get("doc_name"),
+        "locator": citation.get("locator"),
+        "doc_title": citation.get("doc_title"),
+        "source_url": citation.get("source_url"),
+        "passage": _clean_passage(hit.get("content", "")),
+    }
+
+
+def fetch_proofs(citations: list[dict]) -> list[dict]:
+    """Fetch a proving passage for each citation (preserving order). A citation that
+    yields nothing keeps an empty `passage`; the conductor's fail-hard check rejects the
+    turn if any passage is empty. A transport error in `search_request` propagates."""
+    out: list[dict] = []
+    for citation in citations:
+        proof = fetch_passage(citation)
+        if proof is None:
+            proof = {"doc_name": citation.get("doc_name"), "locator": citation.get("locator"),
+                     "doc_title": citation.get("doc_title"),
+                     "source_url": citation.get("source_url"), "passage": ""}
+        out.append(proof)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Knowledge base management (Foundry IQ)
+# ---------------------------------------------------------------------------
 
 # Docs disagree on the path spelling across preview versions; try both.
 _KS_PATHS = ("knowledgesources", "knowledge-sources")
