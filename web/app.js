@@ -445,7 +445,18 @@ function appendCitation(card, citation) {
   const div = el('div', { class: 'benefit-citation' });
   const link = buildCitationLink(citation);
   if (link) div.appendChild(link);
+  if (citation.passage) div.appendChild(buildPassageDisclosure(citation.passage));
   card.appendChild(div);
+}
+
+// Collapsible verbatim-Malay proof passage. Rendered as textContent (el {text}),
+// never innerHTML — the passage is gazette text but we keep the no-injection discipline.
+function buildPassageDisclosure(passage) {
+  const details = el('details', { class: 'citation-passage' });
+  details.appendChild(el('summary', { class: 'passage-summary', text: t('view_passage') }));
+  details.appendChild(el('div', { class: 'passage-note', text: t('passage_note') }));
+  details.appendChild(el('blockquote', { class: 'passage-text', text: passage }));
+  return details;
 }
 
 // Minimum monthly value of a programme — used for the optional amount sort.
@@ -584,6 +595,7 @@ function renderCitations(citations) {
     li.appendChild(el('span', { text: (i + 1) + '. ' }));
     const link = buildCitationLink(cit);
     if (link) li.appendChild(link);
+    if (cit.passage) li.appendChild(buildPassageDisclosure(cit.passage));
     ul.appendChild(li);
   });
   section.appendChild(ul);

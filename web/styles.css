@@ -1671,3 +1671,16 @@ html.theme-dark {
 
 .theme-dark .form-group textarea::placeholder { color: #6b768c; }
 .theme-dark ::selection { background: var(--gold); color: #0A1020; }
+
+.citation-passage { margin-top: 0.4rem; }
+.citation-passage > .passage-summary {
+  cursor: pointer; font-size: 0.85rem; color: var(--link, #1a5276);
+}
+.citation-passage .passage-note {
+  font-size: 0.72rem; opacity: 0.7; margin: 0.3rem 0 0.15rem;
+}
+.citation-passage .passage-text {
+  margin: 0; padding: 0.5rem 0.75rem; border-left: 3px solid var(--accent, #1a5276);
+  background: rgba(0, 0, 0, 0.03); font-size: 0.85rem; line-height: 1.5;
+  white-space: pre-wrap; border-radius: 0 4px 4px 0;
+}
